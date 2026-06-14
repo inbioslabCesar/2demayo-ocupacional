@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 const apiProxyTarget = process.env.CODESPACES
   ? 'http://127.0.0.1:8000'
-  : 'http://127.0.0.1/clinica-2demayo'
+  : 'http://127.0.0.1/2demayo-ocupacional'
 
 const sistemaBuildBase = (process.env.VITE_SISTEMA_BASE || '/sistema/').replace(/\/+$/, '') + '/'
 

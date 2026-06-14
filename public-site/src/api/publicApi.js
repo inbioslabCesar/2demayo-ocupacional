@@ -5,7 +5,7 @@ function normalizeBase(base) {
 function buildApiBaseCandidates() {
   const hostname = window.location.hostname
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return [normalizeBase(`${window.location.protocol}//${hostname}/clinica-2demayo/`)]
+    return [normalizeBase(`${window.location.protocol}//${hostname}/2demayo-ocupacional/`)]
   }
 
   const protocol = window.location.protocol

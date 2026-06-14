@@ -644,8 +644,8 @@ export default function DocumentosPacientePage({ usuario }) {
 
     const backendOrigin = `${window.location.protocol}//${window.location.hostname}`;
     let backendPath = parsed.pathname;
-    if (!backendPath.startsWith('/clinica-2demayo/')) {
-      backendPath = `/clinica-2demayo${backendPath.startsWith('/') ? '' : '/'}${backendPath}`;
+    if (!backendPath.startsWith('/2demayo-ocupacional/')) {
+      backendPath = `/2demayo-ocupacional${backendPath.startsWith('/') ? '' : '/'}${backendPath}`;
     }
     return `${backendOrigin}${backendPath}${parsed.search}${parsed.hash}`;
   }, []);

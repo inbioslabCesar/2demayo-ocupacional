@@ -23,7 +23,7 @@ export const BASE_URL = import.meta.env.DEV
     ? '/'
     : (isProduction
         ? APP_BASE_PATH
-        : "http://127.0.0.1/clinica-2demayo/");
+        : "http://127.0.0.1/2demayo-ocupacional/");
 
 // ---------------------------------------------------------------------------
 // Singleton de configuración: una sola promesa por ciclo de vida de pestaña.
