@@ -1,0 +1,153 @@
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme CSS Custom Properties – default purple palette */
+:root {
+	--color-primary: #7c3aed;
+	--color-primary-dark: #5b21b6;
+	--color-primary-light: #ede9fe;
+	--color-secondary: #4338ca;
+	--color-accent: #6366f1;
+	--color-navbar-bg: #6b21a8;
+	--color-sidebar-from: #9333ea;
+	--color-sidebar-via: #7e22ce;
+	--color-sidebar-to: #3730a3;
+	--color-login-from: #1e3a8a;
+	--color-login-via: #6b21a8;
+	--color-login-to: #312e81;
+}
+
+/* Reset CSS básico */
+html, body, #root {
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+	font-family: system-ui, Arial, sans-serif;
+	background: #f9fafb;
+}
+
+/* Estilos específicos para impresión */
+@media print {
+	/* Configuración general de impresión */
+	* {
+		-webkit-print-color-adjust: exact !important;
+		print-color-adjust: exact !important;
+		color-adjust: exact !important;
+	}
+	
+	/* Optimización para firmas digitales */
+	.firma-digital {
+		break-inside: avoid;
+		page-break-inside: avoid;
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+	
+	/* Optimización para secciones importantes */
+	.seccion-diagnosticos,
+	.seccion-medicamentos,
+	.seccion-laboratorio {
+		break-inside: avoid;
+		page-break-inside: avoid;
+	}
+	
+	/* Evitar cortes de página en elementos críticos */
+	.pie-firma {
+		break-inside: avoid;
+		page-break-inside: avoid;
+		margin-top: 20px;
+	}
+	
+	/* Configuración de márgenes para A4 */
+	@page {
+		margin: 15mm 10mm;
+		size: A4;
+	}
+
+	/* Receta A4 landscape */
+	@page receta-a4-landscape {
+		size: A4 landscape;
+		margin: 10mm;
+	}
+
+	.receta-a4-landscape {
+		page: receta-a4-landscape;
+	}
+	
+	/* Ocultar elementos no necesarios en impresión */
+	.no-print {
+		display: none !important;
+	}
+	
+	/* Asegurar que las imágenes de firma se impriman con tamaños específicos */
+	img[alt*="firma"], img[alt*="Firma"] {
+		-webkit-print-color-adjust: exact !important;
+		print-color-adjust: exact !important;
+		/* Permitir que los estilos inline controlen el tamaño */
+	}
+
+	/* Clases específicas para distintos documentos */
+	.firma-img-hc {
+		max-width: 200px !important;
+		height: 80px !important;
+		width: auto !important;
+	}
+
+	.firma-img-receta,
+	.firma-img-lab,
+	.firma-img-servicios,
+	.firma-img-procedimientos {
+		max-width: 200px !important;
+		height: 80px !important;
+		width: auto !important;
+	}
+
+	/* Ajustes compactos para impresión en hoja A5 (Receta y Laboratorio) */
+	.a5-receta-print,
+	.a5-lab-print,
+	.a5-servicios-print {
+		font-size: 10px !important;
+		line-height: 1.2 !important;
+	}
+
+	.a5-receta-print .text-lg,
+	.a5-lab-print .text-lg,
+	.a5-servicios-print .text-lg {
+		font-size: 14px !important;
+	}
+
+	.a5-receta-print .text-sm,
+	.a5-lab-print .text-sm,
+	.a5-servicios-print .text-sm {
+		font-size: 11px !important;
+	}
+
+	.a5-receta-print .text-xs,
+	.a5-lab-print .text-xs,
+	.a5-servicios-print .text-xs {
+		font-size: 9px !important;
+	}
+
+	.a5-receta-print .firma-img-receta,
+	.a5-lab-print .firma-img-lab,
+	.a5-servicios-print .firma-img-servicios {
+		max-width: 200px !important;
+		height: 72px !important;
+		width: auto !important;
+	}
+
+	/* Reducir tamaño de firmas en HC e Informe de Procedimiento al imprimir */
+	@media print {
+		.firma-img-hc,
+		.firma-img-procedimientos {
+			max-width: 200px !important;
+			height: 72px !important;
+			width: auto !important;
+		}
+	}
+}
+

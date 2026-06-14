@@ -1,0 +1,144 @@
+name: Deploy a Hostinger
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: 'Escribe EXACTAMENTE: DEPLOY_CARDIOVIDA_PROD'
+        required: true
+        type: string
+      confirm_host:
+        description: 'Escribe EXACTAMENTE: cardiovidaiquitos.com'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-hostinger-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirmacion humana obligatoria
+        run: |
+          set -euo pipefail
+          [[ "${{ github.ref_name }}" == "main" ]] || { echo "Este deploy solo puede ejecutarse desde main"; exit 1; }
+          [[ "${{ github.event.inputs.confirm_production }}" == "DEPLOY_CARDIOVIDA_PROD" ]] || { echo "Confirmacion de produccion invalida"; exit 1; }
+          [[ "${{ github.event.inputs.confirm_host }}" == "cardiovidaiquitos.com" ]] || { echo "Confirmacion de host invalida"; exit 1; }
+          echo "Confirmaciones validas. Continuando deploy..."
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Build frontend (sistema + landing)
+        run: npm run build
+
+      - name: Validar secrets SFTP requeridos
+        env:
+          SFTP_HOST: ${{ secrets.HOSTINGER_SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.HOSTINGER_SFTP_PORT }}
+          SFTP_USER: ${{ secrets.HOSTINGER_FTP_USER }}
+          SFTP_PASS: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SFTP_HOST" ]] || { echo "Falta secret HOSTINGER_SFTP_HOST"; exit 1; }
+          [[ -n "$SFTP_PORT" ]] || { echo "Falta secret HOSTINGER_SFTP_PORT"; exit 1; }
+          [[ -n "$SFTP_USER" ]] || { echo "Falta secret HOSTINGER_FTP_USER"; exit 1; }
+          [[ -n "$SFTP_PASS" ]] || { echo "Falta secret HOSTINGER_FTP_PASSWORD"; exit 1; }
+
+      - name: Instalar utilidades SFTP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass rsync
+
+      - name: Preflight remoto SFTP (validar public_html)
+        env:
+          SFTP_HOST: ${{ secrets.HOSTINGER_SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.HOSTINGER_SFTP_PORT }}
+          SFTP_USER: ${{ secrets.HOSTINGER_FTP_USER }}
+          SFTP_PASS: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -p "$SFTP_PASS" ssh -p "$SFTP_PORT" -o StrictHostKeyChecking=no "$SFTP_USER@$SFTP_HOST" \
+            'pwd; ls -la; test -d public_html && ls -la public_html || { echo "No existe public_html en esta cuenta SFTP"; exit 1; }'
+
+      - name: Escribir marcadores de version de deploy
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          printf "commit=%s\ndate=%s\n" "$GIT_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/deploy_version.txt
+          printf "commit=%s\ndate=%s\n" "$GIT_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist-public/deploy_version.txt
+          printf "commit=%s\ndate=%s\n" "$GIT_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > deploy_version_backend.txt
+
+      - name: Publicar backend PHP en public_html/sistema (SFTP)
+        env:
+          SFTP_HOST: ${{ secrets.HOSTINGER_SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.HOSTINGER_SFTP_PORT }}
+          SFTP_USER: ${{ secrets.HOSTINGER_FTP_USER }}
+          SFTP_PASS: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -p "$SFTP_PASS" rsync -az --mkpath \
+            -e "ssh -p $SFTP_PORT -o StrictHostKeyChecking=no" \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude "node_modules/" \
+            --exclude ".vscode/" \
+            --exclude ".idea/" \
+            --exclude "dist/" \
+            --exclude "dist-public/" \
+            --exclude "public-site/" \
+            --exclude "src/" \
+            --exclude "tests/" \
+            --exclude "docs/" \
+            --exclude "tmp/" \
+            --exclude "uploads/" \
+            --exclude ".env" \
+            --exclude ".env.*" \
+            --exclude "config.php" \
+            --exclude "config/instance.local.php" \
+            --exclude "clinica-config/" \
+            --exclude "backup/" \
+            --exclude "*.log" \
+            --exclude "*.sql" \
+            --exclude "*.sql.backup" \
+            ./ "$SFTP_USER@$SFTP_HOST:public_html/sistema/"
+
+          sshpass -p "$SFTP_PASS" rsync -az --mkpath \
+            -e "ssh -p $SFTP_PORT -o StrictHostKeyChecking=no" \
+            ./deploy_version_backend.txt "$SFTP_USER@$SFTP_HOST:public_html/sistema/deploy_version_backend.txt"
+
+      - name: Publicar build de sistema (dist -> public_html/sistema)
+        env:
+          SFTP_HOST: ${{ secrets.HOSTINGER_SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.HOSTINGER_SFTP_PORT }}
+          SFTP_USER: ${{ secrets.HOSTINGER_FTP_USER }}
+          SFTP_PASS: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -p "$SFTP_PASS" rsync -az --mkpath \
+            -e "ssh -p $SFTP_PORT -o StrictHostKeyChecking=no" \
+            ./dist/ "$SFTP_USER@$SFTP_HOST:public_html/sistema/"
+
+      - name: Publicar landing (dist-public -> public_html)
+        env:
+          SFTP_HOST: ${{ secrets.HOSTINGER_SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.HOSTINGER_SFTP_PORT }}
+          SFTP_USER: ${{ secrets.HOSTINGER_FTP_USER }}
+          SFTP_PASS: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -p "$SFTP_PASS" rsync -az --mkpath \
+            -e "ssh -p $SFTP_PORT -o StrictHostKeyChecking=no" \
+            ./dist-public/ "$SFTP_USER@$SFTP_HOST:public_html/"

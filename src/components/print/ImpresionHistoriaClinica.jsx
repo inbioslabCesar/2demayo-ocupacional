@@ -1,0 +1,897 @@
+import { formatColegiatura, formatProfesionalName } from "../../utils/profesionalDisplay";
+import { BASE_URL } from "../../config/config.js";
+
+const ImpresionHistoriaClinica = ({ 
+  paciente, 
+  triaje, 
+  hc,
+  fechaConsulta,
+  fechaConsultaTexto,
+  templateSections,
+  diagnosticos,
+  medicamentos,
+  resultadosLaboratorio,
+  ordenesLaboratorio,
+  ordenesImagen,
+  ordenesProcedimientos,
+  medicoInfo,
+  configuracionClinica 
+}) => {
+
+  // Resolver logo con base URL del servidor PHP
+  const resolveLogoUrl = (rawValue) => {
+    const raw = String(rawValue || '').trim();
+    if (!raw) return '/2demayo.svg';
+    if (/^(https?:\/\/|data:|blob:)/i.test(raw)) return raw;
+    return `${BASE_URL}${raw.replace(/^\/+/, '')}`;
+  };
+
+  const logoSrc = resolveLogoUrl(configuracionClinica?.logo_url);
+  const formatearFecha = (fecha) => {
+    if (!fecha) return '';
+    return new Date(fecha).toLocaleDateString('es-ES', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const formatearHora = (fecha) => {
+    if (!fecha) return '';
+    return new Date(fecha).toLocaleTimeString('es-ES', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const nombrePaciente = paciente?.nombre || paciente?.nombres || '';
+  const apellidoPaciente = paciente?.apellido || paciente?.apellidos || '';
+  const motivoConsulta = triaje?.motivo || triaje?.motivo_consulta || '';
+  const sintomasPrincipales = triaje?.sintomas || triaje?.sintomas_principales || triaje?.sintoma_principal || '';
+  const nivelConciencia = triaje?.nivel_conciencia || triaje?.nivelConciencia || '';
+  const hidratacion = triaje?.hidratacion || triaje?.estado_hidratacion || '';
+  const coloracion = triaje?.coloracion || triaje?.estado_coloracion || '';
+  const fechaConsultaValor =
+    fechaConsulta
+    || paciente?.fecha_consulta
+    || triaje?.fecha_consulta
+    || triaje?.fecha
+    || triaje?.created_at
+    || hc?.fecha_consulta
+    || "";
+
+  const formatearFechaConsultaImpresion = (rawValue) => {
+    const raw = String(rawValue || '').trim();
+    if (!raw) return '-';
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return formatearFecha(raw) || raw;
+    }
+
+    const parsed = new Date(raw.replace(' ', 'T'));
+    if (Number.isNaN(parsed.getTime())) return raw;
+
+    const tieneHora = /[T\s]\d{1,2}:\d{2}/.test(raw);
+    if (!tieneHora) {
+      return parsed.toLocaleDateString('es-PE', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    }
+
+    return parsed.toLocaleString('es-PE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const fechaConsultaImpresion = String(fechaConsultaTexto || '').trim() || formatearFechaConsultaImpresion(fechaConsultaValor);
+
+  const calcularImc = () => {
+    const peso = parseFloat(triaje?.peso);
+    const tallaRaw = parseFloat(triaje?.talla);
+    if (!Number.isFinite(peso) || !Number.isFinite(tallaRaw) || peso <= 0 || tallaRaw <= 0) return null;
+    const tallaEnMetros = tallaRaw <= 3 ? tallaRaw : tallaRaw / 100;
+    const imc = peso / Math.pow(tallaEnMetros, 2);
+    return Number.isFinite(imc) ? imc.toFixed(1) : null;
+  };
+
+  const imcCalculado = calcularImc();
+  const tallaNumerica = parseFloat(triaje?.talla);
+  const unidadTalla = Number.isFinite(tallaNumerica) && tallaNumerica > 0 && tallaNumerica <= 3 ? 'm' : 'cm';
+
+  const normalizarTexto = (texto) => String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+  const limpiarPrefijoRepetido = (valor, etiquetas = []) => {
+    let limpio = String(valor ?? '').trim();
+    etiquetas.forEach((etiqueta) => {
+      const txt = String(etiqueta || '').trim();
+      if (!txt) return;
+      const escapado = txt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`^${escapado}\\s*[:\\-]\\s*`, 'i');
+      limpio = limpio.replace(re, '').trim();
+    });
+    return limpio;
+  };
+
+  const esParametroGenerico = (parametro) => /^item\s*\d+$/i.test(String(parametro || '').trim());
+
+  const isMetaResultKey = (key) => {
+    const k = String(key || '');
+    return k.endsWith('__imprimir_examen') || k.endsWith('__alarma_activa') || k.endsWith('__alarma_dias');
+  };
+
+  const idToNombreExamen = {};
+  if (Array.isArray(ordenesLaboratorio)) {
+    ordenesLaboratorio.forEach((orden) => {
+      if (!Array.isArray(orden?.examenes)) return;
+      orden.examenes.forEach((examen) => {
+        if (typeof examen === 'object' && examen?.id) {
+          idToNombreExamen[String(examen.id)] = examen.nombre || `Examen ${examen.id}`;
+        } else if (typeof examen === 'number' || (typeof examen === 'string' && /^\d+$/.test(examen))) {
+          idToNombreExamen[String(examen)] = `Examen ${examen}`;
+        }
+      });
+    });
+  }
+
+  const resultadosConDatos = Array.isArray(resultadosLaboratorio)
+    ? resultadosLaboratorio.filter((resultado) => {
+        if (!resultado?.resultados || typeof resultado.resultados !== 'object') return false;
+        return Object.entries(resultado.resultados).some(([k, v]) => !isMetaResultKey(k) && v !== null && String(v).trim() !== '');
+      })
+    : [];
+
+  const toTimestamp = (rawValue) => {
+    const parsed = new Date(String(rawValue || '').replace(' ', 'T'));
+    const ts = parsed.getTime();
+    return Number.isNaN(ts) ? 0 : ts;
+  };
+
+  const tipoImagenLabel = {
+    rx: 'Rayos X',
+    ecografia: 'Ecografía',
+    tomografia: 'Tomografía',
+  };
+
+  const ordenesImagenSolicitadas = Array.isArray(ordenesImagen)
+    ? ordenesImagen
+        .map((orden) => {
+          const servicios = Array.isArray(orden?.servicios_nombres)
+            ? orden.servicios_nombres.filter(Boolean)
+            : Array.isArray(orden?.servicios)
+            ? orden.servicios.map((s) => s?.descripcion || s?.nombre).filter(Boolean)
+            : [];
+          return {
+            id: orden?.id,
+            tipo: tipoImagenLabel[String(orden?.tipo || '').toLowerCase()] || String(orden?.tipo || 'Imagen').trim() || 'Imagen',
+            servicios,
+            fecha: orden?.fecha || orden?.fecha_solicitud || '',
+            estado: String(orden?.estado || '').toLowerCase(),
+          };
+        })
+        .filter((orden) => orden.estado !== 'cancelado' && orden.servicios.length > 0)
+        .sort((a, b) => toTimestamp(b.fecha) - toTimestamp(a.fecha))
+    : [];
+
+  const ordenesProcedimientosSolicitados = Array.isArray(ordenesProcedimientos)
+    ? ordenesProcedimientos
+        .map((orden) => ({
+          id: orden?.id,
+          procedimientos: Array.isArray(orden?.procedimientos)
+            ? orden.procedimientos.map((p) => p?.descripcion || p?.nombre).filter(Boolean)
+            : [],
+          fecha: orden?.fecha || orden?.fecha_solicitud || '',
+          estado: String(orden?.estado || '').toLowerCase(),
+        }))
+        .filter((orden) => orden.estado !== 'cancelado' && orden.procedimientos.length > 0)
+        .sort((a, b) => toTimestamp(b.fecha) - toTimestamp(a.fecha))
+    : [];
+
+  const dayKey = (rawValue) => {
+    const ts = toTimestamp(rawValue);
+    if (!ts) return '';
+    const d = new Date(ts);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const hoyKey = dayKey(new Date());
+
+  const splitByToday = (rows) => {
+    const source = Array.isArray(rows) ? rows : [];
+    return {
+      hoy: source.filter((row) => dayKey(row?.fecha) === hoyKey),
+      anteriores: source.filter((row) => dayKey(row?.fecha) !== hoyKey),
+    };
+  };
+
+  const imagenesAgrupadas = splitByToday(ordenesImagenSolicitadas);
+  const procedimientosAgrupados = splitByToday(ordenesProcedimientosSolicitados);
+  const COMMON_ACRONYMS = new Set(['fur', 'ram', 'tbc', 'epoc', 'hta', 'dm', 'dm2', 'vih', 'its', 'ira']);
+
+  // Función para mostrar mensaje cuando no hay datos
+  const SeccionVacia = ({ titulo, mensaje = "No hay información registrada" }) => (
+    <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+      <h3 className="font-semibold text-gray-600 mb-2 border-b border-gray-300">
+        {titulo}
+      </h3>
+      <p className="text-sm text-gray-500 italic text-center p-4">
+        {mensaje}
+      </p>
+    </div>
+  );
+
+  const formatFieldLabel = (fieldKey, explicitLabel = '') => {
+    const custom = String(explicitLabel || '').trim();
+    if (custom) return custom;
+
+    const key = String(fieldKey || '').trim();
+    if (!key) return 'Campo';
+    return key
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .map((token) => {
+        const lower = token.toLowerCase();
+        if (COMMON_ACRONYMS.has(lower)) return lower.toUpperCase();
+        return lower.charAt(0).toUpperCase() + lower.slice(1);
+      })
+      .join(' ');
+  };
+
+  const normalizeFieldMeta = (rawMeta = {}) => {
+    const type = String(rawMeta?.type || 'textarea').trim().toLowerCase();
+    const width = String(rawMeta?.width || 'half').trim().toLowerCase();
+    const rowsRaw = Number(rawMeta?.rows ?? 2);
+    const optionsRaw = Array.isArray(rawMeta?.options)
+      ? rawMeta.options
+      : String(rawMeta?.options || '').split(',').map((item) => item.trim()).filter(Boolean);
+
+    return {
+      type: ['text', 'textarea', 'number', 'select'].includes(type) ? type : 'textarea',
+      width: ['sixth', 'quarter', 'third', 'half', 'full'].includes(width) ? width : 'half',
+      rows: Number.isFinite(rowsRaw) ? Math.max(1, Math.min(8, Math.trunc(rowsRaw))) : 2,
+      options: optionsRaw,
+      breakAfter: Boolean(rawMeta?.breakAfter ?? rawMeta?.break_after ?? false),
+      label: String(rawMeta?.label || '').trim(),
+    };
+  };
+
+  const widthToClass = (width) => {
+    switch (width) {
+      case 'sixth':
+        return 'col-span-12 md:col-span-2';
+      case 'quarter':
+        return 'col-span-12 md:col-span-3';
+      case 'third':
+        return 'col-span-12 md:col-span-4';
+      case 'full':
+        return 'col-span-12';
+      case 'half':
+      default:
+        return 'col-span-12 md:col-span-6';
+    }
+  };
+
+  const widthToPrintClass = (width) => {
+    // Para impresión, usamos los estilos directos sin breakpoints
+    switch (width) {
+      case 'sixth':
+        return 'col-span-2';
+      case 'quarter':
+        return 'col-span-3';
+      case 'third':
+        return 'col-span-4';
+      case 'full':
+        return 'col-span-12';
+      case 'half':
+      default:
+        return 'col-span-6';
+    }
+  };
+
+  const printableSections = Object.entries(templateSections || {}).reduce((acc, [sectionKey, fields]) => {
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return acc;
+    const normalizedSection = String(sectionKey || '').trim().toLowerCase();
+    // Tratamiento/plan se imprime en su bloque fijo más abajo.
+    if (normalizedSection === 'plan') return acc;
+
+    const fieldEntries = Object.entries(fields)
+      .filter(([fieldKey]) => {
+        const normalizedField = String(fieldKey || '').trim().toLowerCase();
+        return normalizedField !== 'tratamiento';
+      })
+      .map(([fieldKey, fieldMeta]) => ({
+        fieldKey,
+        meta: normalizeFieldMeta(fieldMeta),
+      }));
+
+    if (fieldEntries.length > 0) {
+      acc.push({ sectionKey, fieldEntries });
+    }
+    return acc;
+  }, []);
+
+  return (
+    <div className="bg-white p-8 max-w-4xl mx-auto shadow-lg print:shadow-none print:max-w-none">
+      <style>{`
+        @media print {
+          .firma-medico {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .firma-imagen {
+            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact;
+          }
+        }
+      `}</style>
+      {/* Encabezado de la clínica */}
+      <div className="text-center pb-2 mb-2" style={{ borderBottom: `2px solid ${configuracionClinica?.nombre_color || '#2563eb'}` }}>
+        <div className="flex items-center justify-center gap-4 mb-2">
+          <img 
+            src={logoSrc} 
+            alt={configuracionClinica?.nombre_clinica || 'Logo'} 
+            className="h-16 w-auto"
+          />
+          <div>
+            <h1 className="text-2xl font-bold" style={{ color: configuracionClinica?.nombre_color || '#1e40af' }}>
+              {configuracionClinica?.nombre_clinica || 'MI CLÍNICA'}
+            </h1>
+            {configuracionClinica?.slogan && (
+              <p className="text-sm font-medium" style={{ color: configuracionClinica.slogan_color || '#4b5563' }}>
+                {configuracionClinica.slogan}
+              </p>
+            )}
+            <p className="text-sm text-gray-600">
+              {configuracionClinica?.direccion || 'Dirección de la clínica'}
+            </p>
+            <p className="text-sm text-gray-600">
+              Tel: {configuracionClinica?.telefono || '123-456-789'} | Email: {configuracionClinica?.email || 'contacto@clinica.com'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Título del documento */}
+      <div className="text-center mb-2">
+        <h2 className="text-lg font-bold text-gray-800 border-b border-gray-300 pb-1">
+          📋 HISTORIA CLÍNICA
+        </h2>
+        <div className="flex justify-between text-xs text-gray-600 mt-1">
+          <span>Fecha: {formatearFecha(new Date())}</span>
+          <span>Hora: {formatearHora(new Date())}</span>
+        </div>
+      </div>
+
+      {/* Datos del paciente */}
+      <div className="grid grid-cols-2 gap-2 mb-2 p-2 bg-blue-50 rounded-lg border">
+        <div>
+          <h3 className="font-semibold text-blue-800 mb-1 border-b border-blue-200 text-xs">
+            👤 DATOS DEL PACIENTE
+          </h3>
+          <div className="space-y-0.5 text-xs">
+            <p><strong>Nombre:</strong> {nombrePaciente} {apellidoPaciente}</p>
+            <p><strong>DNI:</strong> {paciente?.dni}</p>
+            <p><strong>Edad:</strong> {paciente?.edad} años</p>
+            <p><strong>Sexo:</strong> {paciente?.sexo}</p>
+            <p><strong>Teléfono:</strong> {paciente?.telefono}</p>
+          </div>
+        </div>
+        
+        <div>
+          <h3 className="font-semibold text-blue-800 mb-1 border-b border-blue-200 text-xs">
+            🩺 INFORMACIÓN MÉDICA
+          </h3>
+          <div className="space-y-0.5 text-xs">
+            <p><strong>Profesional:</strong> {formatProfesionalName(medicoInfo || {})}</p>
+            <p><strong>Colegiatura:</strong> {formatColegiatura(medicoInfo || {})}</p>
+            {medicoInfo?.rne && <p><strong>RNE:</strong> {medicoInfo.rne}</p>}
+            <p><strong>Especialidad:</strong> {medicoInfo?.especialidad}</p>
+            <p><strong>Fecha Consulta:</strong> {fechaConsultaImpresion}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Motivo de consulta desde triaje */}
+      {motivoConsulta && (
+        <div className="mb-2 p-2 bg-yellow-50 rounded-lg border border-yellow-200">
+          <h3 className="font-semibold text-yellow-800 mb-1 border-b border-yellow-300 text-xs">
+            📝 MOTIVO DE CONSULTA
+          </h3>
+          <p className="text-xs leading-relaxed whitespace-pre-wrap break-all">{motivoConsulta}</p>
+        </div>
+      )}
+
+      {/* Síntomas principales desde triaje */}
+      {sintomasPrincipales && (
+        <div className="mb-2 p-2 bg-orange-50 rounded-lg border border-orange-200">
+          <h3 className="font-semibold text-orange-800 mb-1 border-b border-orange-300 text-xs">
+            🩺 SÍNTOMAS PRINCIPALES
+          </h3>
+          <p className="text-xs leading-relaxed whitespace-pre-wrap break-all">{sintomasPrincipales}</p>
+        </div>
+      )}
+
+      {/* Signos vitales del triaje */}
+      {triaje && (
+        <div className="mb-2 p-2 bg-green-50 rounded-lg border border-green-200">
+          <h3 className="font-semibold text-green-800 mb-1 border-b border-green-300 text-xs">
+            ❤️ SIGNOS VITALES
+          </h3>
+          <div className="grid grid-cols-4 gap-2 text-xs">
+            {triaje.presion_arterial && (
+              <div>
+                <strong>P/A:</strong> {triaje.presion_arterial} mmHg
+              </div>
+            )}
+            {triaje.frecuencia_cardiaca && (
+              <div>
+                <strong>FC:</strong> {triaje.frecuencia_cardiaca} lpm
+              </div>
+            )}
+            {triaje.frecuencia_respiratoria && (
+              <div>
+                <strong>FR:</strong> {triaje.frecuencia_respiratoria} rpm
+              </div>
+            )}
+            {triaje.temperatura && (
+              <div>
+                <strong>T°:</strong> {triaje.temperatura}°C
+              </div>
+            )}
+            {triaje.saturacion && (
+              <div>
+                <strong>SpO₂:</strong> {triaje.saturacion}%
+              </div>
+            )}
+            {triaje.peso && (
+              <div>
+                <strong>Peso:</strong> {triaje.peso} kg
+              </div>
+            )}
+            {triaje.talla && (
+              <div>
+                <strong>Talla:</strong> {triaje.talla} {unidadTalla}
+              </div>
+            )}
+            {imcCalculado && (
+              <div>
+                <strong>IMC:</strong> {imcCalculado} kg/m²
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Estado general del triaje */}
+      {(nivelConciencia || hidratacion || coloracion) && (
+        <div className="mb-2 p-2 bg-purple-50 rounded-lg border border-purple-200">
+          <h3 className="font-semibold text-purple-800 mb-1 border-b border-purple-300 text-xs">
+            👤 ESTADO GENERAL
+          </h3>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            {nivelConciencia && (
+              <div>
+                <strong>Conciencia:</strong> {nivelConciencia}
+              </div>
+            )}
+            {hidratacion && (
+              <div>
+                <strong>Hidratación:</strong> {hidratacion}
+              </div>
+            )}
+            {coloracion && (
+              <div>
+                <strong>Coloración:</strong> {coloracion}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Secciones dinámicas según plantilla HC */}
+      {printableSections.length > 0 ? (
+        printableSections.map(({ sectionKey, fieldEntries }) => {
+          const sectionLabel = formatFieldLabel(sectionKey);
+          const fieldsWithData = fieldEntries.filter(({ fieldKey }) => String(hc?.[fieldKey] ?? '').trim() !== '');
+          if (fieldsWithData.length === 0) return null;
+
+          return (
+            <div key={sectionKey} className="mb-2 p-2 bg-purple-50 rounded-lg border border-purple-200">
+              <h3 className="font-semibold text-purple-800 mb-1.5 border-b border-purple-300 text-xs">
+                🔍 {sectionLabel.toUpperCase()}
+              </h3>
+              <div className="grid grid-cols-12 gap-1.5 text-xs">
+                {fieldsWithData.flatMap(({ fieldKey, meta }) => {
+                  const nodes = [
+                    <div key={`${sectionKey}_${fieldKey}`} className={widthToPrintClass(meta.width)}>
+                    <strong className="text-xs">{formatFieldLabel(fieldKey, meta.label)}:</strong>
+                    <p className="mt-0.5 p-1 bg-white rounded border whitespace-pre-wrap break-all text-xs">{hc[fieldKey]}</p>
+                    </div>
+                  ];
+                  if (meta.breakAfter) {
+                    nodes.push(<div key={`${sectionKey}_${fieldKey}_break`} className="col-span-12 h-0" />);
+                  }
+                  return nodes;
+                })}
+              </div>
+            </div>
+          );
+        })
+      ) : (
+        <SeccionVacia titulo="🔍 ANAMNESIS Y EXAMEN FÍSICO" mensaje="No hay campos de plantilla con datos para imprimir" />
+      )}
+
+      {/* Diagnósticos */}
+      {diagnosticos && diagnosticos.length > 0 ? (
+        <div className="mb-2 p-2 bg-red-50 rounded-lg border border-red-200 seccion-diagnosticos">
+          <h3 className="font-semibold text-red-800 mb-1 border-b border-red-300 text-xs">
+            🎯 DIAGNÓSTICOS CIE-10
+          </h3>
+          <div className="bg-white rounded border border-red-100 p-2 text-xs leading-tight space-y-1">
+            {diagnosticos.map((diagnostico, index) => (
+              <div key={index} className="text-gray-900">
+                <span className="font-semibold">{index + 1}.</span>{' '}
+                <span className="font-mono">{diagnostico.codigo || 'S/C'}</span>{' '}
+                <span>- {diagnostico.descripcion || diagnostico.nombre || 'Sin descripción'}</span>
+                <span className="text-gray-600"> ({diagnostico.tipo || 'Principal'})</span>
+                {diagnostico.observaciones && String(diagnostico.observaciones).trim() !== '' && (
+                  <span className="text-gray-700"> · Obs: {diagnostico.observaciones}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <SeccionVacia titulo="🎯 DIAGNÓSTICOS CIE-10" mensaje="No se han registrado diagnósticos para esta consulta" />
+      )}
+
+      {/* Tratamiento */}
+      {hc.tratamiento && (
+        <div className="mb-2 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
+          <h3 className="font-semibold text-indigo-800 mb-1 border-b border-indigo-300 text-xs">
+            💊 PLAN DE TRATAMIENTO
+          </h3>
+          <p className="text-xs leading-relaxed p-1 bg-white rounded border whitespace-pre-wrap break-all">{hc.tratamiento}</p>
+        </div>
+      )}
+
+      {/* Receta Médica */}
+      {medicamentos && medicamentos.length > 0 ? (
+        <div className="mb-2 p-2 bg-green-50 rounded-lg border border-green-200 seccion-medicamentos">
+          <h3 className="font-semibold text-green-800 mb-1 border-b border-green-300 text-xs">
+            💉 RECETA MÉDICA
+          </h3>
+          <div className="bg-white rounded border border-green-100 p-2 text-xs leading-tight space-y-1">
+            {medicamentos.map((medicamento, index) => {
+              const nombreMed = medicamento?.nombre || medicamento?.medicamento || 'Medicamento sin nombre';
+              const codigoMed = medicamento?.codigo ? ` (${medicamento.codigo})` : '';
+              const presentacion = medicamento?.presentacion || '';
+              const concentracion = medicamento?.concentracion || '';
+              const laboratorio = medicamento?.laboratorio || '';
+              const dosis = medicamento?.dosis || '';
+              const frecuencia = medicamento?.frecuencia || '';
+              const duracion = medicamento?.duracion || '';
+              const obs = medicamento?.observaciones || medicamento?.indicaciones || '';
+
+              const especificaciones = [
+                presentacion ? `Pres: ${presentacion}` : null,
+                concentracion ? `Conc: ${concentracion}` : null,
+                laboratorio ? `Lab: ${laboratorio}` : null,
+              ].filter(Boolean).join(' | ');
+
+              const detalles = [
+                dosis ? `D: ${dosis}` : null,
+                frecuencia ? `F: ${frecuencia}` : null,
+                duracion ? `T: ${duracion}` : null,
+                obs ? `Obs: ${obs}` : null,
+              ].filter(Boolean).join(' | ');
+
+              return (
+                <div key={index} className="text-gray-900">
+                  <span className="font-semibold">{index + 1}.</span>{' '}
+                  <span className="font-semibold">{nombreMed}</span>
+                  <span className="text-gray-600">{codigoMed}</span>
+                  {especificaciones && <span className="text-xs text-blue-700"> [{especificaciones}]</span>}
+                  {detalles && <span> - {detalles}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <SeccionVacia titulo="💉 RECETA MÉDICA" mensaje="No se han prescrito medicamentos para esta consulta" />
+      )}
+
+      {/* Exámenes de Laboratorio Solicitados (solo si no existen resultados) */}
+      {resultadosConDatos.length === 0 && (
+        ordenesLaboratorio && ordenesLaboratorio.length > 0 ? (
+          <div className="mb-2 p-2 bg-blue-50 rounded-lg border border-blue-200 seccion-laboratorio">
+            <h3 className="font-semibold text-blue-800 mb-1 border-b border-blue-300 text-xs">
+              🔬 EXÁMENES DE LABORATORIO SOLICITADOS
+            </h3>
+            <div className="space-y-1">
+              {ordenesLaboratorio.map((orden, ordenIndex) => (
+                <div key={ordenIndex} className="p-1 bg-white rounded-lg border border-blue-100">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="inline-block px-1.5 py-0.5 bg-blue-100 text-blue-800 text-xs font-semibold rounded">
+                      Orden #{orden.id || ordenIndex + 1}
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {formatearFecha(orden.fecha_solicitud)}
+                    </span>
+                  </div>
+                  
+                  {orden.examenes && orden.examenes.length > 0 ? (
+                    <div className="space-y-1">
+                      {orden.examenes.map((examen, examenIndex) => (
+                        <div key={examenIndex} className="flex items-center gap-1 p-1 bg-blue-50 rounded border-l-4 border-blue-300">
+                          <span className="w-4 h-4 bg-blue-500 text-white text-xs font-bold rounded-full flex items-center justify-center flex-shrink-0">
+                            {examenIndex + 1}
+                          </span>
+                          <div className="flex-1">
+                            <p className="font-medium text-xs text-gray-900">{examen.nombre}</p>
+                            {examen.descripcion && (
+                              <p className="text-xs text-gray-600 mt-0.5">{examen.descripcion}</p>
+                            )}
+                          </div>
+                          <div className="text-xs">
+                            {(() => {
+                              const estadoOrden = (orden.estado_visual || orden.estado || 'pendiente').toLowerCase();
+                              return (
+                            <span className={`px-2 py-1 rounded-full text-xs ${
+                              estadoOrden === 'pendiente' 
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : estadoOrden === 'completado'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {orden.estado_visual || orden.estado || 'pendiente'}
+                            </span>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500 italic">No hay exámenes específicos registrados</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <SeccionVacia titulo="🔬 EXÁMENES DE LABORATORIO SOLICITADOS" mensaje="No se han solicitado exámenes de laboratorio para esta consulta" />
+        )
+      )}
+
+      {/* Servicios de apoyo diagnóstico solicitados (imágenes y procedimientos) */}
+      {(ordenesImagenSolicitadas.length > 0 || ordenesProcedimientosSolicitados.length > 0) && (
+        <div className="mb-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
+          <h3 className="font-semibold text-slate-800 mb-1 border-b border-slate-300 text-xs">
+            🧾 SERVICIOS DE APOYO DIAGNÓSTICO SOLICITADOS
+          </h3>
+
+          {ordenesImagenSolicitadas.length > 0 && (
+            <div className="mb-2">
+              <p className="text-xs font-semibold text-slate-700 mb-1">Imágenes diagnósticas</p>
+              {imagenesAgrupadas.hoy.length > 0 && (
+                <div className="mb-1.5">
+                  <p className="text-[11px] font-semibold text-emerald-700 mb-1">Hoy</p>
+                  <div className="space-y-1">
+                    {imagenesAgrupadas.hoy.map((orden, idx) => (
+                      <div key={`img-hoy-${orden.id || idx}`} className="bg-white border border-emerald-200 rounded p-1 text-xs">
+                        <div className="flex justify-between items-center mb-0.5">
+                          <span className="font-semibold text-slate-800">{orden.tipo}</span>
+                          <span className="text-[10px] text-slate-500">{formatearFecha(orden.fecha)}</span>
+                        </div>
+                        <ul className="list-disc pl-5 text-slate-700">
+                          {orden.servicios.map((serv, i) => (
+                            <li key={`img-hoy-${orden.id || idx}-${i}`}>{serv}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {imagenesAgrupadas.anteriores.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold text-slate-600 mb-1">Anteriores</p>
+                  <div className="space-y-1">
+                    {imagenesAgrupadas.anteriores.map((orden, idx) => (
+                      <div key={`img-ant-${orden.id || idx}`} className="bg-white border border-slate-200 rounded p-1 text-xs">
+                        <div className="flex justify-between items-center mb-0.5">
+                          <span className="font-semibold text-slate-800">{orden.tipo}</span>
+                          <span className="text-[10px] text-slate-500">{formatearFecha(orden.fecha)}</span>
+                        </div>
+                        <ul className="list-disc pl-5 text-slate-700">
+                          {orden.servicios.map((serv, i) => (
+                            <li key={`img-ant-${orden.id || idx}-${i}`}>{serv}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {ordenesProcedimientosSolicitados.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-700 mb-1">Procedimientos</p>
+              {procedimientosAgrupados.hoy.length > 0 && (
+                <div className="mb-1.5">
+                  <p className="text-[11px] font-semibold text-emerald-700 mb-1">Hoy</p>
+                  <div className="space-y-1">
+                    {procedimientosAgrupados.hoy.map((orden, idx) => (
+                      <div key={`proc-hoy-${orden.id || idx}`} className="bg-white border border-emerald-200 rounded p-1 text-xs">
+                        <div className="flex justify-between items-center mb-0.5">
+                          <span className="font-semibold text-slate-800">Solicitud #{orden.id || idx + 1}</span>
+                          <span className="text-[10px] text-slate-500">{formatearFecha(orden.fecha)}</span>
+                        </div>
+                        <ul className="list-disc pl-5 text-slate-700">
+                          {orden.procedimientos.map((proc, i) => (
+                            <li key={`proc-hoy-${orden.id || idx}-${i}`}>{proc}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {procedimientosAgrupados.anteriores.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold text-slate-600 mb-1">Anteriores</p>
+                  <div className="space-y-1">
+                    {procedimientosAgrupados.anteriores.map((orden, idx) => (
+                      <div key={`proc-ant-${orden.id || idx}`} className="bg-white border border-slate-200 rounded p-1 text-xs">
+                        <div className="flex justify-between items-center mb-0.5">
+                          <span className="font-semibold text-slate-800">Solicitud #{orden.id || idx + 1}</span>
+                          <span className="text-[10px] text-slate-500">{formatearFecha(orden.fecha)}</span>
+                        </div>
+                        <ul className="list-disc pl-5 text-slate-700">
+                          {orden.procedimientos.map((proc, i) => (
+                            <li key={`proc-ant-${orden.id || idx}-${i}`}>{proc}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Resultados de laboratorio - formato comprimido */}
+      {resultadosConDatos.length > 0 && (
+        <div className="mb-4 p-1.5 bg-cyan-50 rounded-lg border border-cyan-200 seccion-laboratorio">
+          <h3 className="font-semibold text-cyan-800 mb-0.5 border-b border-cyan-300 text-xs">
+            🧪 RESULTADOS DE LABORATORIO
+          </h3>
+          <div className="space-y-0.5">
+            {resultadosConDatos.map((resultado, idx) => {
+              const agrupados = {};
+              Object.entries(resultado.resultados || {}).forEach(([key, value]) => {
+                if (isMetaResultKey(key)) return;
+                if (value === null || String(value).trim() === '') return;
+                let examId = key;
+                let parametro = null;
+                if (key.includes('__')) {
+                  [examId, parametro] = key.split('__');
+                }
+                if (!agrupados[examId]) agrupados[examId] = [];
+                agrupados[examId].push({ parametro, value });
+              });
+
+              return (
+                <div key={resultado.id || idx} className="bg-white border border-cyan-100 rounded p-1 text-[11px] leading-tight">
+                  <div className="text-[9px] text-gray-600 mb-0.5">
+                    Fecha: {formatearFecha(resultado.fecha)} {formatearHora(resultado.fecha)}
+                  </div>
+                  {(() => {
+                    const resumenPorExamen = Object.entries(agrupados).map(([examId, items]) => {
+                    const nombreExamen = idToNombreExamen[String(examId)] || `Examen ${examId}`;
+                    const partes = items
+                      .map(({ parametro, value }) => {
+                        const valorLimpio = limpiarPrefijoRepetido(value, [parametro, nombreExamen]);
+                        if (!valorLimpio) return '';
+
+                        const parametroNorm = normalizarTexto(parametro);
+                        const examenNorm = normalizarTexto(nombreExamen);
+                        const valorNorm = normalizarTexto(valorLimpio);
+
+                        const mostrarParametro = Boolean(
+                          parametro &&
+                          !esParametroGenerico(parametro) &&
+                          parametroNorm &&
+                          parametroNorm !== examenNorm &&
+                          !valorNorm.startsWith(parametroNorm)
+                        );
+
+                        return mostrarParametro ? `${parametro}: ${valorLimpio}` : valorLimpio;
+                      })
+                      .filter(Boolean);
+
+                    const partesUnicas = [...new Set(partes)];
+                    if (partesUnicas.length === 0) return '';
+
+                    return `${nombreExamen}: ${partesUnicas.join(' | ')}`;
+                  }).filter(Boolean);
+
+                    return (
+                      <div className="text-gray-800">
+                        {resumenPorExamen.join(' • ')}
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Pie de página con firma digital */}
+      <div className="mt-8 pt-4 border-t-2 border-gray-300">
+        <div className="flex justify-between items-end">
+          <div className="text-xs text-gray-600">
+            <p>Documento generado digitalmente</p>
+            <p>Fecha de impresión: {formatearFecha(new Date())} - {formatearHora(new Date())}</p>
+          </div>
+          
+          <div className="text-center pie-firma">
+            {/* Firma digital del médico */}
+            {medicoInfo?.firma && (
+              <div className="mt-0 mb-[-10px] firma-digital">
+                <img 
+                  src={medicoInfo.firma} 
+                  alt="Firma digital del médico" 
+                  className="mx-auto bg-transparent p-0 firma-img-hc"
+                />
+              </div>
+            )}
+            
+            <div className="border-t-2 border-gray-400 pt-2 min-w-[200px]">
+              <p className="font-semibold text-xs leading-tight">
+                {formatProfesionalName(medicoInfo || {})}
+              </p>
+              <p className="text-[10px] leading-tight text-gray-600">{medicoInfo?.especialidad}</p>
+              <p className="text-[10px] leading-tight text-gray-600">{formatColegiatura(medicoInfo || {})}</p>
+              {medicoInfo?.rne && (
+                <p className="text-[10px] leading-tight text-gray-600">RNE: {medicoInfo.rne}</p>
+              )}
+              
+              {/* Mensaje si no hay firma */}
+              {!medicoInfo?.firma && (
+                <div className="mt-2 mb-4 h-16 flex items-center justify-center border border-dashed border-gray-300 text-xs text-gray-400">
+                  [Espacio para firma manual]
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ImpresionHistoriaClinica;

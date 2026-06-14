@@ -1,0 +1,1033 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { authFetch } from "../../utils/apiClient";
+
+function MedicoConsultas({ medicoId, onIniciarConsulta, onVerDetalle }) {
+  const navigate = useNavigate();
+  const [consultas, setConsultas] = useState([]);
+  const [page, setPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(5);
+  const [totalRows, setTotalRows] = useState(0);
+  const [stats, setStats] = useState({ total: 0, pendientes: 0, emergencias: 0 });
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+  
+  // Buscador dinámico
+  const [busqueda, setBusqueda] = useState("");
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+
+  const cargarConsultas = async () => {
+    if (!medicoId) return;
+    setLoading(true);
+    setMsg("");
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        per_page: String(rowsPerPage),
+      });
+      if (busqueda.trim()) params.set('search', busqueda.trim());
+      if (fechaDesde) params.set('fecha_desde', fechaDesde);
+      if (fechaHasta) params.set('fecha_hasta', fechaHasta);
+
+      const response = await authFetch(`api_consultas.php?${params.toString()}`);
+      const data = await response.json();
+
+      if (!data?.success) {
+        setConsultas([]);
+        setStats({ total: 0, pendientes: 0, emergencias: 0 });
+        setTotalRows(0);
+        setMsg(data?.error || "No se pudieron cargar las consultas");
+        return;
+      }
+
+      setConsultas(data.consultas || []);
+      setStats(data.stats || { total: 0, pendientes: 0, emergencias: 0 });
+      setTotalRows(data.pagination?.total ?? data.stats?.total ?? 0);
+
+      const totalPagesServidor = data.pagination?.total_pages ?? 1;
+      if (page > totalPagesServidor) {
+        setPage(totalPagesServidor);
+      }
+    } catch (error) {
+      console.error("Error cargando consultas:", error);
+      setConsultas([]);
+      setStats({ total: 0, pendientes: 0, emergencias: 0 });
+      setTotalRows(0);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    cargarConsultas();
+  }, [medicoId, page, rowsPerPage, busqueda, fechaDesde, fechaHasta]);
+
+  const actualizarEstado = async (id, estado) => {
+    setMsg("");
+    setLoading(true);
+    try {
+      await authFetch("api_consultas.php", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, estado })
+      });
+      
+      await cargarConsultas();
+      setMsg(`Consulta ${estado} correctamente`);
+    } catch (error) {
+      console.error("Error actualizando estado:", error);
+      setMsg("Error al actualizar el estado");
+    } finally {
+      setLoading(false);
+    }
+  };
+  const consultasPaginadas = consultas;
+  const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
+
+  // Funciones de paginación
+  const handleRowsPerPage = (e) => {
+    setRowsPerPage(Number(e.target.value));
+    setPage(1);
+  };
+  const handlePrev = () => setPage((p) => Math.max(1, p - 1));
+  const handleNext = () => setPage((p) => Math.min(totalPages, p + 1));
+
+  // Función para formatear fecha
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'N/A';
+    try {
+      // Evita desfase por zona horaria cuando viene en formato YYYY-MM-DD
+      const soloFecha = String(dateStr).slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(soloFecha)) {
+        const [year, month, day] = soloFecha.split('-');
+        return `${day}/${month}/${year}`;
+      }
+
+      return new Date(dateStr).toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const formatDateTime = (dateTimeStr) => {
+    if (!dateTimeStr) return '';
+    try {
+      const normalized = String(dateTimeStr).replace(' ', 'T');
+      const d = new Date(normalized);
+      if (Number.isNaN(d.getTime())) return String(dateTimeStr);
+      return d.toLocaleString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return String(dateTimeStr);
+    }
+  };
+
+  // Funciones para colores y iconos de estado
+  const getEstadoColor = (estado) => {
+    switch (estado?.toLowerCase()) {
+      case 'pendiente':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'completada':
+      case 'completado':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'cancelada':
+      case 'cancelado':
+        return 'bg-red-100 text-red-800 border-red-200';
+      case 'en_proceso':
+        return 'bg-blue-100 text-blue-800 border-blue-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  const getEstadoIcon = (estado) => {
+    switch (estado?.toLowerCase()) {
+      case 'pendiente':
+        return '⏳ ';
+      case 'completada':
+      case 'completado':
+        return '✅ ';
+      case 'cancelada':
+      case 'cancelado':
+        return '❌ ';
+      case 'en_proceso':
+        return '🔄 ';
+      default:
+        return '📋 ';
+    }
+  };
+
+  const getEstadoVisual = (consulta) => {
+    const estado = String(consulta?.estado || '').trim().toLowerCase();
+    const hcCompletada = estado === 'completada' || estado === 'completado';
+    const cancelada = estado === 'cancelada' || estado === 'cancelado';
+
+    if (hcCompletada) {
+      return {
+        label: 'Completada',
+        icon: '✅ ',
+        className: 'bg-green-100 text-green-800 border-green-200'
+      };
+    }
+
+    if (cancelada) {
+      return {
+        label: 'Cancelada',
+        icon: '❌ ',
+        className: 'bg-red-100 text-red-800 border-red-200'
+      };
+    }
+
+    return {
+      label: 'Falta atender',
+      icon: '⏳ ',
+      className: 'bg-amber-100 text-amber-800 border-amber-200'
+    };
+  };
+
+  const getClasificacionColor = (clasificacion) => {
+    switch (clasificacion?.toLowerCase()) {
+      case 'emergencia':
+        return 'bg-red-100 text-red-800 border-red-200 animate-pulse';
+      case 'urgente':
+      case 'urgencia':
+        return 'bg-orange-100 text-orange-800 border-orange-200';
+      case 'no urgente':
+      case 'normal':
+        return 'bg-green-100 text-green-800 border-green-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  const getClasificacionIcon = (clasificacion) => {
+    switch (clasificacion?.toLowerCase()) {
+      case 'emergencia':
+        return '🚨 ';
+      case 'urgente':
+      case 'urgencia':
+        return '⚠️ ';
+      case 'no urgente':
+      case 'normal':
+        return '🟢 ';
+      default:
+        return '⚪ ';
+    }
+  };
+
+  const getHoyYmd = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const getTipoConsultaMeta = (consulta) => {
+    const origen = String(consulta?.origen_creacion || '').trim().toLowerCase();
+    if (origen === 'reservada_sin_turno') {
+      return {
+        label: 'Reservada sin turno',
+        icon: '🕘',
+        className: 'bg-cyan-100 text-cyan-800 border-cyan-200'
+      };
+    }
+
+    const tipo = String(consulta?.tipo_consulta || '').trim().toLowerCase();
+    if (tipo === 'espontanea' || tipo === 'espontánea') {
+      return {
+        label: 'Espontánea',
+        icon: '⚡',
+        className: 'bg-amber-100 text-amber-800 border-amber-200'
+      };
+    }
+    if (tipo === 'programada') {
+      return {
+        label: 'Programada',
+        icon: '📅',
+        className: 'bg-cyan-100 text-cyan-800 border-cyan-200'
+      };
+    }
+
+    const hoyYmd = getHoyYmd();
+    if (consulta?.fecha && String(consulta.fecha) > hoyYmd) {
+      return {
+        label: 'Programada',
+        icon: '📅',
+        className: 'bg-cyan-100 text-cyan-800 border-cyan-200'
+      };
+    }
+
+    return {
+      label: 'Consulta',
+      icon: '🩺',
+      className: 'bg-gray-100 text-gray-700 border-gray-200'
+    };
+  };
+
+  const getAgendaMeta = (consulta) => {
+    const esReprogramada = Number(consulta?.es_reprogramada || 0) === 1 || Boolean(consulta?.reprogramada_en);
+    if (esReprogramada) {
+      return {
+        label: 'Reprogramada',
+        icon: '🔁',
+        className: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200'
+      };
+    }
+    return {
+      label: 'Normal',
+      icon: '🗓️',
+      className: 'bg-slate-100 text-slate-700 border-slate-200'
+    };
+  };
+
+  const getOrigenConsultaMeta = (consulta) => {
+    const origen = String(consulta?.origen_creacion || '').trim().toLowerCase();
+    const hcOrigenId = Number(consulta?.hc_origen_id || 0);
+    if (origen === 'hc_proxima' || hcOrigenId > 0) {
+      return {
+        visible: true,
+        label: 'HC proxima',
+        icon: '🧾',
+        className: 'bg-indigo-100 text-indigo-800 border-indigo-200'
+      };
+    }
+    return {
+      visible: false,
+      label: '',
+      icon: '',
+      className: ''
+    };
+  };
+
+  const getContratoMeta = (consulta) => {
+    const esContrato = Number(consulta?.es_contrato || 0) === 1;
+    if (!esContrato) {
+      return {
+        visible: false,
+        label: '',
+        icon: '',
+        className: ''
+      };
+    }
+
+    return {
+      visible: true,
+      label: 'Contrato',
+      icon: '📘',
+      className: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    };
+  };
+
+  // NUEVO: Función para obtener estilo y estado del cobro (falta_cancelar)
+  const getEstadoCobro = (consulta) => {
+    const estado = String(consulta?.estado || '').toLowerCase().trim();
+    const esControl = Number(consulta?.es_control || 0) === 1;
+
+    // Una consulta ya completada nunca debe aparecer bloqueada, independientemente
+    // de su origen o estado de cotización.
+    if (estado === 'completada' || estado === 'completado') {
+      return { faltaPagar: false, label: null, rowClass: '', badgeClass: '' };
+    }
+
+    if (esControl) {
+      return {
+        faltaPagar: false,
+        label: '🆓 Sin costo',
+        rowClass: '',
+        badgeClass: 'bg-sky-100 text-sky-800 border-sky-200'
+      };
+    }
+
+    const estadoCotizacion = String(consulta?.cotizacion_estado || '').toLowerCase().trim();
+    const cotizacionId = Number(consulta?.cotizacion_id || 0);
+    const tieneCotizacion = cotizacionId > 0;
+    const esHcProxima = Number(consulta?.hc_origen_id || 0) > 0
+      || String(consulta?.origen_creacion || '').toLowerCase().trim() === 'hc_proxima';
+    const cotizacionPagada = estadoCotizacion === 'pagado' || estadoCotizacion === 'pagada' || estadoCotizacion === 'control';
+
+    if (esHcProxima && !cotizacionPagada && !tieneCotizacion) {
+      return {
+        faltaPagar: true,
+        label: '⏳ Por cobrar',
+        rowClass: 'opacity-50 cursor-not-allowed',
+        badgeClass: 'bg-amber-100 text-amber-800 border-amber-200'
+      };
+    }
+
+    if (tieneCotizacion && !cotizacionPagada) {
+      return {
+        faltaPagar: true,
+        label: '⏳ Pago pendiente',
+        rowClass: 'opacity-50 cursor-not-allowed',
+        badgeClass: 'bg-amber-100 text-amber-800 border-amber-200'
+      };
+    }
+
+    if (estado === 'falta_cancelar' && !cotizacionPagada) {
+      return {
+        faltaPagar: true,
+        label: '⏳ Por cobrar',
+        rowClass: 'opacity-50 cursor-not-allowed',
+        badgeClass: 'bg-amber-100 text-amber-800 border-amber-200'
+      };
+    }
+
+    if (cotizacionPagada) {
+      return {
+        faltaPagar: false,
+        label: '✅ Cotizacion pagada',
+        rowClass: '',
+        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+      };
+    }
+
+    return {
+      faltaPagar: false,
+      label: null,
+      rowClass: '',
+      badgeClass: ''
+    };
+  };
+
+  const themeGradientMain = "linear-gradient(90deg, var(--color-primary) 0%, var(--color-secondary) 55%, var(--color-accent) 100%)";
+
+  return (
+    <div className="w-full px-2 sm:px-4 lg:max-w-7xl lg:mx-auto">
+      {/* Panel compacto: cabecera + resumen + filtros */}
+      <div className="bg-white/80 backdrop-blur-sm rounded-xl sm:rounded-2xl shadow-xl p-3 sm:p-4 mb-4 sm:mb-5 border border-white/50">
+        <div className="flex flex-col gap-3 sm:gap-4 mb-3 sm:mb-4">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full flex items-center justify-center" style={{ background: themeGradientMain }}>
+              <svg className="w-3 h-3 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <h3 className="text-sm sm:text-base font-semibold text-gray-800">🔍 Mis Consultas: filtros y resumen</h3>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+            <div className="rounded-lg sm:rounded-xl p-2.5 sm:p-3 text-white shadow-md" style={{ background: themeGradientMain }}>
+              <p className="text-white/85 text-[11px] sm:text-xs font-medium">Total consultas</p>
+              <p className="text-lg sm:text-xl font-bold leading-tight">{stats.total}</p>
+            </div>
+            <div className="rounded-lg sm:rounded-xl p-2.5 sm:p-3 text-white shadow-md" style={{ background: "linear-gradient(90deg, var(--color-secondary) 0%, var(--color-accent) 100%)" }}>
+              <p className="text-white/85 text-[11px] sm:text-xs font-medium">Pendientes</p>
+              <p className="text-lg sm:text-xl font-bold leading-tight">{stats.pendientes}</p>
+            </div>
+            <div className="rounded-lg sm:rounded-xl p-2.5 sm:p-3 text-white shadow-md" style={{ background: "linear-gradient(90deg, var(--color-accent) 0%, var(--color-primary) 100%)" }}>
+              <p className="text-white/85 text-[11px] sm:text-xs font-medium">Emergencias</p>
+              <p className="text-lg sm:text-xl font-bold leading-tight">{stats.emergencias}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+          {/* Búsqueda general */}
+          <div className="col-span-full lg:col-span-2">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Búsqueda general</label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-2 sm:pl-3 flex items-center pointer-events-none">
+                <svg className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                value={busqueda}
+                onChange={e => { setBusqueda(e.target.value); setPage(1); }}
+                placeholder="Buscar por nombre, HC o DNI..."
+                className="pl-8 sm:pl-10 w-full px-3 sm:px-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-200 bg-white/80"
+                onFocus={(e) => {
+                  e.currentTarget.style.setProperty("--tw-ring-color", "var(--color-primary)");
+                }}
+                style={{ boxShadow: "none" }}
+              />
+            </div>
+          </div>
+          
+          {/* Fecha desde */}
+          <div>
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">📅 Desde</label>
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={e => { setFechaDesde(e.target.value); setPage(1); }}
+              className="w-full px-3 sm:px-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-200 bg-white/80"
+              onFocus={(e) => {
+                e.currentTarget.style.setProperty("--tw-ring-color", "var(--color-primary)");
+              }}
+            />
+          </div>
+          
+          {/* Fecha hasta */}
+          <div>
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">📅 Hasta</label>
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={e => { setFechaHasta(e.target.value); setPage(1); }}
+              className="w-full px-3 sm:px-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-200 bg-white/80"
+              onFocus={(e) => {
+                e.currentTarget.style.setProperty("--tw-ring-color", "var(--color-primary)");
+              }}
+            />
+          </div>
+        </div>
+        
+        {/* Botón limpiar filtros */}
+        {(busqueda || fechaDesde || fechaHasta) && (
+          <div className="mt-2 sm:mt-3 flex justify-center sm:justify-end">
+            <button 
+              onClick={() => { setBusqueda(""); setFechaDesde(""); setFechaHasta(""); setPage(1); }}
+              className="inline-flex items-center gap-1 sm:gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-all duration-200 hover:scale-105 text-sm"
+            >
+              <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Limpiar Filtros
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Leyenda rápida de tipo de consulta */}
+      <div className="mb-4 sm:mb-6 flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm">
+        <span className="text-gray-600 font-medium">Tipo de consulta:</span>
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-cyan-100 text-cyan-800 border-cyan-200 font-medium">
+          📅 Programada
+        </span>
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-amber-100 text-amber-800 border-amber-200 font-medium">
+          ⚡ Espontánea
+        </span>
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-gray-100 text-gray-700 border-gray-200 font-medium">
+          🩺 Consulta
+        </span>
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200 font-medium">
+          🔁 Reprogramada
+        </span>
+      </div>
+
+      {/* Lista de consultas moderna - Responsive */}
+      {loading ? (
+        <div className="bg-white/80 backdrop-blur-sm rounded-xl sm:rounded-2xl shadow-xl p-8 sm:p-12 border border-white/50 flex justify-center">
+          <div className="flex flex-col items-center gap-3 sm:gap-4">
+            <div className="w-12 h-12 sm:w-16 sm:h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-gray-600 font-medium text-sm sm:text-base">🏥 Cargando consultas médicas...</p>
+          </div>
+        </div>
+      ) : consultasPaginadas.length === 0 ? (
+        <div className="bg-white/80 backdrop-blur-sm rounded-xl sm:rounded-2xl shadow-xl p-8 sm:p-12 border border-white/50 text-center">
+          <div className="flex flex-col items-center gap-3 sm:gap-4">
+            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-r from-gray-300 to-gray-400 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 sm:w-10 sm:h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-lg sm:text-xl font-semibold text-gray-700 mb-2">📅 No hay consultas</h3>
+              <p className="text-gray-500 text-sm sm:text-base">No se encontraron consultas con los filtros aplicados</p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Vista Desktop - Tabla */}
+          <div className="hidden lg:block bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/50 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead style={{ background: themeGradientMain }}>
+                  <tr>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">👤 Paciente</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">🔁 Tipo agenda</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">🏥 HC / DNI</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">📅 Fecha</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">⏰ Hora</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">📊 Estado</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">🚨 Clasificación</th>
+                    <th className="px-3 py-3 text-left text-sm font-semibold text-white">🩺 Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {consultasPaginadas.map((consulta, index) => {
+                    const esFilaPar = index % 2 === 0;
+                    const tipoMeta = getTipoConsultaMeta(consulta);
+                    const agendaMeta = getAgendaMeta(consulta);
+                    const origenMeta = getOrigenConsultaMeta(consulta);
+                    const contratoMeta = getContratoMeta(consulta);
+                    const estadoVisual = getEstadoVisual(consulta);
+                    const esProgramada = tipoMeta.label === 'Programada';
+                    const estadoCobro = getEstadoCobro(consulta);
+                    const accionesBloqueadas = estadoCobro.faltaPagar;
+                    const tituloAccionesBloqueadas = 'No se puede operar esta consulta hasta que se registre el pago';
+                    
+                    return (
+                      <tr
+                        key={consulta.id}
+                        className={`${
+                          esProgramada ? 'bg-cyan-50/70' : (esFilaPar ? 'bg-white/60' : 'bg-blue-50/40')
+                        } ${estadoCobro.rowClass} hover:bg-blue-100/60 transition-all duration-200 hover:shadow-lg transform hover:-translate-y-0.5`}
+                        title={estadoCobro.faltaPagar ? 'Esta cita está pendiente de pago. No se puede editar hasta que se registre el pago.' : ''}
+                      >
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
+                              <span className="text-white font-semibold text-sm">
+                                {((consulta.paciente_nombre || '') + (consulta.paciente_apellido || '')).charAt(0) || 'P'}
+                              </span>
+                            </div>
+                            <div>
+                              <div className="font-semibold text-gray-900">
+                                {consulta.paciente_nombre ? `${consulta.paciente_nombre} ${consulta.paciente_apellido || ''}`.trim() : `Paciente #${consulta.paciente_id}`}
+                              </div>
+                              <div className="mt-1">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${tipoMeta.className}`}>
+                                  {tipoMeta.icon} {tipoMeta.label}
+                                </span>
+                                {origenMeta.visible && (
+                                  <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${origenMeta.className}`}>
+                                    {origenMeta.icon} {origenMeta.label}
+                                  </span>
+                                )}
+                                {contratoMeta.visible && (
+                                  <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${contratoMeta.className}`}>
+                                    {contratoMeta.icon} {contratoMeta.label}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${agendaMeta.className}`}
+                            title={agendaMeta.label === 'Reprogramada' && consulta?.reprogramada_en ? `Reprogramada el ${formatDateTime(consulta.reprogramada_en)}` : ''}
+                          >
+                            {agendaMeta.icon} {agendaMeta.label}
+                          </span>
+                          {agendaMeta.label === 'Reprogramada' && consulta?.reprogramada_en && (
+                            <div className="mt-1 text-[11px] text-fuchsia-700 font-medium">
+                              {formatDateTime(consulta.reprogramada_en)}
+                            </div>
+                          )}
+                        </td>
+                        
+                        <td className="px-3 py-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                HC: {consulta.historia_clinica || 'N/A'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                DNI: {consulta.dni || 'N/A'}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <span className="font-medium text-gray-900">
+                              {formatDate(consulta.fecha)}
+                            </span>
+                          </div>
+                        </td>
+                        
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <svg className="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="font-medium text-gray-900">
+                              {consulta.hora || 'N/A'}
+                            </span>
+                          </div>
+                        </td>
+                        
+                        <td className="px-3 py-3">
+                          <div className="flex flex-col gap-2">
+                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${estadoVisual.className}`}>
+                              {estadoVisual.icon}
+                              {estadoVisual.label}
+                            </span>
+                            {estadoCobro.label && (
+                              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${estadoCobro.badgeClass} w-fit`}>
+                                {estadoCobro.label}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        
+                        <td className="px-3 py-3">
+                          <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${getClasificacionColor(consulta.clasificacion)}`}>
+                            {getClasificacionIcon(consulta.clasificacion)}
+                            {consulta.clasificacion || 'Sin clasificar'}
+                          </span>
+                        </td>
+                        
+                        <td className="px-3 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            {/* Botones de acción desktop */}
+                            {consulta.estado === 'pendiente' && !consulta.clasificacion && (
+                              <>
+                                <button
+                                  onClick={() => actualizarEstado(consulta.id, 'completada')}
+                                  disabled={accionesBloqueadas}
+                                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-medium transition-all duration-200 shadow-md ${
+                                    accionesBloqueadas
+                                      ? 'bg-gray-300 text-gray-600 cursor-not-allowed opacity-60'
+                                      : 'bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white hover:scale-105'
+                                  }`}
+                                  title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Completar consulta'}
+                                >
+                                  <span className="text-sm">✔️</span>
+                                </button>
+                                <button
+                                  onClick={() => actualizarEstado(consulta.id, 'cancelada')}
+                                  disabled={accionesBloqueadas}
+                                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-medium transition-all duration-200 shadow-md ${
+                                    accionesBloqueadas
+                                      ? 'bg-gray-300 text-gray-600 cursor-not-allowed opacity-60'
+                                      : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white hover:scale-105'
+                                  }`}
+                                  title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Cancelar consulta'}
+                                >
+                                  <span className="text-sm">✖️</span>
+                                </button>
+                              </>
+                            )}
+                            
+                            <button
+                              onClick={() => navigate(`/historia-clinica/${consulta.paciente_id}/${consulta.id}`)}
+                              disabled={accionesBloqueadas}
+                              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-medium transition-all duration-200 ${
+                                accionesBloqueadas
+                                  ? 'bg-gray-300 text-gray-600 cursor-not-allowed opacity-50'
+                                  : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white hover:scale-105 shadow-md'
+                              }`}
+                              title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Ver Historia Clínica'}
+                            >
+                              <span className="text-sm">📖</span>
+                            </button>
+                            
+                            {onIniciarConsulta && (
+                              <button
+                                onClick={() => onIniciarConsulta(consulta)}
+                                disabled={accionesBloqueadas}
+                                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 shadow-md ${
+                                  accionesBloqueadas
+                                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed opacity-60'
+                                    : 'bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white hover:scale-105'
+                                }`}
+                                title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Iniciar consulta'}
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                                Iniciar
+                              </button>
+                            )}
+                            
+                            {onVerDetalle && (
+                              <button
+                                onClick={() => onVerDetalle(consulta)}
+                                disabled={accionesBloqueadas}
+                                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 shadow-md ${
+                                  accionesBloqueadas
+                                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed opacity-60'
+                                    : 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white hover:scale-105'
+                                }`}
+                                title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Ver detalle'}
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                                Ver
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Vista Móvil - Tarjetas */}
+          <div className="lg:hidden space-y-3 sm:space-y-4">
+            {consultasPaginadas.map((consulta) => {
+              const tipoMeta = getTipoConsultaMeta(consulta);
+              const agendaMeta = getAgendaMeta(consulta);
+              const origenMeta = getOrigenConsultaMeta(consulta);
+              const contratoMeta = getContratoMeta(consulta);
+              const estadoVisual = getEstadoVisual(consulta);
+              const esProgramada = tipoMeta.label === 'Programada';
+              const estadoCobro = getEstadoCobro(consulta);
+              const accionesBloqueadas = estadoCobro.faltaPagar;
+              const tituloAccionesBloqueadas = 'No se puede operar esta consulta hasta que se registre el pago';
+              return (
+              <div
+                key={consulta.id}
+                  title={estadoCobro.faltaPagar ? 'Esta cita está pendiente de pago' : ''}
+                className={`backdrop-blur-sm rounded-xl shadow-lg border p-4 hover:shadow-xl transition-all duration-200 hover:scale-[1.02] ${
+                  esProgramada ? 'bg-cyan-50/80 border-cyan-200/70' : 'bg-white/80 border-white/50'
+                  } ${estadoCobro.rowClass}`}
+              >
+                {/* Header de la tarjeta con paciente */}
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-white font-semibold text-lg">
+                      {((consulta.paciente_nombre || '') + (consulta.paciente_apellido || '')).charAt(0) || 'P'}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-gray-900 truncate">
+                      {consulta.paciente_nombre ? `${consulta.paciente_nombre} ${consulta.paciente_apellido || ''}`.trim() : `Paciente #${consulta.paciente_id}`}
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${tipoMeta.className}`}>
+                        {tipoMeta.icon} {tipoMeta.label}
+                      </span>
+                      {origenMeta.visible && (
+                        <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${origenMeta.className}`}>
+                          {origenMeta.icon} {origenMeta.label}
+                        </span>
+                      )}
+                      {contratoMeta.visible && (
+                        <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${contratoMeta.className}`}>
+                          {contratoMeta.icon} {contratoMeta.label}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Información en grid */}
+                <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
+                  <div>
+                    <p className="text-gray-600 font-medium">📅 Fecha</p>
+                    <p className="text-gray-900">{formatDate(consulta.fecha)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600 font-medium">⏰ Hora</p>
+                    <p className="text-gray-900">{consulta.hora || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600 font-medium">🏥 HC</p>
+                    <p className="text-gray-900">{consulta.historia_clinica || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600 font-medium">👤 DNI</p>
+                    <p className="text-gray-900">{consulta.dni || 'N/A'}</p>
+                  </div>
+                </div>
+
+                {/* Estados */}
+                <div className="flex flex-wrap gap-2 mb-4">
+                  <span
+                    className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${agendaMeta.className}`}
+                    title={agendaMeta.label === 'Reprogramada' && consulta?.reprogramada_en ? `Reprogramada el ${formatDateTime(consulta.reprogramada_en)}` : ''}
+                  >
+                    {agendaMeta.icon}
+                    {agendaMeta.label}
+                  </span>
+                  {agendaMeta.label === 'Reprogramada' && consulta?.reprogramada_en && (
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200">
+                      {formatDateTime(consulta.reprogramada_en)}
+                    </span>
+                  )}
+                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${estadoVisual.className}`}>
+                    {estadoVisual.icon}
+                    {estadoVisual.label}
+                  </span>
+                  {estadoCobro.label && (
+                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${estadoCobro.badgeClass}`}>
+                      {estadoCobro.label}
+                    </span>
+                  )}
+                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${getClasificacionColor(consulta.clasificacion)}`}>
+                    {getClasificacionIcon(consulta.clasificacion)}
+                    {consulta.clasificacion || 'Sin clasificar'}
+                  </span>
+                </div>
+
+                {/* Botones de acción móvil */}
+                <div className="flex flex-wrap gap-2">
+                  {consulta.estado === 'pendiente' && !consulta.clasificacion && (
+                    <>
+                      <button
+                        onClick={() => actualizarEstado(consulta.id, 'completada')}
+                        disabled={accionesBloqueadas}
+                        title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Completar consulta'}
+                        className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg font-medium transition-all duration-200 text-sm ${
+                          accionesBloqueadas
+                            ? 'bg-gray-400 text-gray-200 cursor-not-allowed opacity-60'
+                            : 'bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white'
+                        }`}
+                      >
+                        <span>✔️</span>
+                        <span className="hidden sm:inline">Completar</span>
+                      </button>
+                      <button
+                        onClick={() => actualizarEstado(consulta.id, 'cancelada')}
+                        disabled={accionesBloqueadas}
+                        title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Cancelar consulta'}
+                        className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg font-medium transition-all duration-200 text-sm ${
+                          accionesBloqueadas
+                            ? 'bg-gray-400 text-gray-200 cursor-not-allowed opacity-60'
+                            : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white'
+                        }`}
+                      >
+                        <span>✖️</span>
+                        <span className="hidden sm:inline">Cancelar</span>
+                      </button>
+                    </>
+                  )}
+                  
+                  <button
+                    onClick={() => navigate(`/historia-clinica/${consulta.paciente_id}/${consulta.id}`)}
+                    disabled={accionesBloqueadas}
+                    title={accionesBloqueadas ? tituloAccionesBloqueadas : ''}
+                      className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg font-medium transition-all duration-200 text-sm ${
+                        accionesBloqueadas
+                          ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                          : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white'
+                      }`}
+                  >
+                    <span>📖</span>
+                    <span className="hidden sm:inline">Historia</span>
+                  </button>
+                  
+                  {onIniciarConsulta && (
+                    <button
+                      onClick={() => onIniciarConsulta(consulta)}
+                      disabled={accionesBloqueadas}
+                      title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Iniciar consulta'}
+                      className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg font-medium transition-all duration-200 text-sm ${
+                        accionesBloqueadas
+                          ? 'bg-gray-400 text-gray-200 cursor-not-allowed opacity-60'
+                          : 'bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white'
+                      }`}
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                      <span className="hidden sm:inline">Iniciar</span>
+                    </button>
+                  )}
+                  
+                  {onVerDetalle && (
+                    <button
+                      onClick={() => onVerDetalle(consulta)}
+                      disabled={accionesBloqueadas}
+                      title={accionesBloqueadas ? tituloAccionesBloqueadas : 'Ver detalle'}
+                      className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg font-medium transition-all duration-200 text-sm ${
+                        accionesBloqueadas
+                          ? 'bg-gray-400 text-gray-200 cursor-not-allowed opacity-60'
+                          : 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white'
+                      }`}
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      <span className="hidden sm:inline">Ver</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );})}
+          </div>
+        </>
+      )}
+
+      {/* Mensaje de estado */}
+      {msg && (
+        <div className="mt-3 sm:mt-4 p-3 sm:p-4 bg-blue-100 border border-blue-300 rounded-lg sm:rounded-xl text-blue-800 text-center text-sm sm:text-base">
+          {msg}
+        </div>
+      )}
+
+      {/* Paginación moderna responsive */}
+      {totalRows > 0 && (
+        <div className="mt-4 sm:mt-8 bg-white/80 backdrop-blur-sm rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6 border border-white/50">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4">
+            {/* Controles de página */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button
+                onClick={handlePrev}
+                disabled={page === 1}
+                className="inline-flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white rounded-lg font-medium transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none text-sm"
+              >
+                <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span className="hidden sm:inline">Anterior</span>
+              </button>
+              
+              <div className="flex items-center gap-1 sm:gap-2">
+                <span className="text-gray-600 font-medium text-sm sm:text-base">
+                  {page}/{totalPages}
+                </span>
+              </div>
+              
+              <button
+                onClick={handleNext}
+                disabled={page === totalPages}
+                className="inline-flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white rounded-lg font-medium transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none text-sm"
+              >
+                <span className="hidden sm:inline">Siguiente</span>
+                <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Selector de filas por página */}
+            <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3">
+              <label className="text-xs sm:text-sm font-medium text-gray-700">
+                📄 <span className="hidden sm:inline">Filas por página:</span><span className="sm:hidden">Por página:</span>
+              </label>
+              <select
+                value={rowsPerPage}
+                onChange={handleRowsPerPage}
+                className="px-2 sm:px-3 py-1.5 sm:py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white/80"
+              >
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+              </select>
+              
+              <span className="text-xs sm:text-sm text-gray-500 text-center sm:text-left">
+                <span className="block sm:inline">{consultasPaginadas.length} de {totalRows}</span>
+                <span className="hidden sm:inline"> consultas</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default MedicoConsultas;
