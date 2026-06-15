@@ -6,7 +6,11 @@ require_once __DIR__ . '/db_ocupacional.php';
 
 function reply($code, $payload)
 {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode($payload);
     exit;
 }

@@ -2,14 +2,48 @@
 
 require_once __DIR__ . '/config.php';
 
-$ocupHost = getenv('DB_OCUP_HOST') ?: DB_HOST;
-$ocupName = getenv('DB_OCUP_NAME') ?: '2demayo_so';
-$ocupUser = getenv('DB_OCUP_USER') ?: DB_USER;
-$ocupPass = getenv('DB_OCUP_PASS');
-if ($ocupPass === false) {
-    $ocupPass = DB_PASS;
+$ocupRuntimeHost = isset($runtimeConfig['DB_OCUP_HOST']) ? (string) $runtimeConfig['DB_OCUP_HOST'] : '';
+$ocupRuntimeName = isset($runtimeConfig['DB_OCUP_NAME']) ? (string) $runtimeConfig['DB_OCUP_NAME'] : '';
+$ocupRuntimeUser = isset($runtimeConfig['DB_OCUP_USER']) ? (string) $runtimeConfig['DB_OCUP_USER'] : '';
+$ocupRuntimePass = isset($runtimeConfig['DB_OCUP_PASS']) ? (string) $runtimeConfig['DB_OCUP_PASS'] : '';
+$ocupRuntimePort = isset($runtimeConfig['DB_OCUP_PORT']) ? (int) $runtimeConfig['DB_OCUP_PORT'] : 0;
+
+$ocupHost = getenv('DB_OCUP_HOST');
+if ($ocupHost === false || $ocupHost === '') {
+    $ocupHost = $ocupRuntimeHost !== '' ? $ocupRuntimeHost : DB_HOST;
 }
-$ocupPort = (int) (getenv('DB_OCUP_PORT') ?: 3306);
+
+$ocupName = getenv('DB_OCUP_NAME');
+if ($ocupName === false || $ocupName === '') {
+    if ($ocupRuntimeName !== '') {
+        $ocupName = $ocupRuntimeName;
+    } elseif (defined('IS_PRODUCTION') && IS_PRODUCTION) {
+        $ocupName = DB_NAME;
+    } else {
+        $ocupName = '2demayo_so';
+    }
+}
+
+$ocupUser = getenv('DB_OCUP_USER');
+if ($ocupUser === false || $ocupUser === '') {
+    $ocupUser = $ocupRuntimeUser !== '' ? $ocupRuntimeUser : DB_USER;
+}
+
+$ocupPass = getenv('DB_OCUP_PASS');
+if ($ocupPass === false || $ocupPass === '') {
+    if ($ocupRuntimePass !== '') {
+        $ocupPass = $ocupRuntimePass;
+    } else {
+        $ocupPass = DB_PASS;
+    }
+}
+
+$ocupPortEnv = getenv('DB_OCUP_PORT');
+if ($ocupPortEnv === false || $ocupPortEnv === '') {
+    $ocupPort = $ocupRuntimePort > 0 ? $ocupRuntimePort : 3306;
+} else {
+    $ocupPort = (int) $ocupPortEnv;
+}
 if ($ocupPort <= 0) {
     $ocupPort = 3306;
 }

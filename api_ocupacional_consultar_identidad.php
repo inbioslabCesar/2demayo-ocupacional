@@ -5,7 +5,11 @@ require_once __DIR__ . '/config.php';
 
 function respond($statusCode, $payload)
 {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     http_response_code($statusCode);
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode($payload);
     exit;
 }

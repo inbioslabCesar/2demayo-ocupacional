@@ -1,3 +1,5 @@
+import { BASE_URL } from "../config/config";
+
 const jsonHeaders = {
   "Content-Type": "application/json",
 };
@@ -24,7 +26,7 @@ export async function listarEmpresasOcupacionales({ estado = "activo" } = {}) {
     page: "1",
     per_page: "200",
   });
-  const response = await fetch(`/api_ocupacional_empresas.php?${params.toString()}`);
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return payload.data || [];
 }
@@ -45,7 +47,7 @@ export async function listarEmpresasOcupacionalesPaginado({
     sort_by: sortBy,
     sort_dir: sortDir,
   });
-  const response = await fetch(`/api_ocupacional_empresas.php?${params.toString()}`);
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return {
     data: payload.data || [],
@@ -54,7 +56,7 @@ export async function listarEmpresasOcupacionalesPaginado({
 }
 
 export async function inactivarEmpresaOcupacional(id) {
-  const response = await fetch("/api_ocupacional_empresas.php", {
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify({ accion: "inactivar", id }),
@@ -64,7 +66,7 @@ export async function inactivarEmpresaOcupacional(id) {
 }
 
 export async function crearEmpresaOcupacional(data) {
-  const response = await fetch("/api_ocupacional_empresas.php", {
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify(data),
@@ -79,13 +81,13 @@ export async function verificarIdentidadClinica({ documentoTipo, documentoNumero
     documento_numero: documentoNumero,
   });
 
-  const response = await fetch(`/api_ocupacional_consultar_identidad.php?${params.toString()}`);
+  const response = await fetch(`${BASE_URL}api_ocupacional_consultar_identidad.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return payload.data;
 }
 
 export async function registrarTrabajadorOcupacional(data) {
-  const response = await fetch("/api_ocupacional_trabajadores.php", {
+  const response = await fetch(`${BASE_URL}api_ocupacional_trabajadores.php`, {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify(data),
@@ -100,7 +102,7 @@ export async function listarTrabajadoresOcupacionales({ estado = "todos" } = {})
     page: "1",
     per_page: "200",
   });
-  const response = await fetch(`/api_ocupacional_trabajadores.php?${params.toString()}`);
+  const response = await fetch(`${BASE_URL}api_ocupacional_trabajadores.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return payload.data || [];
 }
@@ -125,7 +127,7 @@ export async function listarTrabajadoresOcupacionalesPaginado({
   if (Number(empresaId) > 0) {
     params.set("empresa_id", String(empresaId));
   }
-  const response = await fetch(`/api_ocupacional_trabajadores.php?${params.toString()}`);
+  const response = await fetch(`${BASE_URL}api_ocupacional_trabajadores.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return {
     data: payload.data || [],
@@ -134,7 +136,7 @@ export async function listarTrabajadoresOcupacionalesPaginado({
 }
 
 export async function darBajaTrabajadorOcupacional(id) {
-  const response = await fetch("/api_ocupacional_trabajadores_baja.php", {
+  const response = await fetch(`${BASE_URL}api_ocupacional_trabajadores_baja.php`, {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify({ id }),
