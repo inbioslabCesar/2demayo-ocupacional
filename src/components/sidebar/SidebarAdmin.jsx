@@ -174,6 +174,30 @@ export default function SidebarAdmin({ onClose }) {
       </SidebarSection>
 
       <SidebarSection
+        title="Salud Ocupacional"
+        iconName="Medical"
+        isOpen={openSection === "ocupacional"}
+        onToggle={() => handleToggleSection("ocupacional")}
+      >
+        <Link
+          to="/salud-ocupacional/empresas"
+          className="py-2.5 px-3 rounded-lg text-cyan-700 hover:bg-gradient-to-r hover:from-cyan-50 hover:to-sky-100 font-medium flex items-center gap-3 transition-all duration-300"
+          onClick={onClose}
+        >
+          <Icon iconName="CityNext" className="text-lg text-cyan-600" />
+          <span>Empresas</span>
+        </Link>
+        <Link
+          to="/salud-ocupacional/trabajadores"
+          className="py-2.5 px-3 rounded-lg text-emerald-700 hover:bg-gradient-to-r hover:from-emerald-50 hover:to-teal-100 font-medium flex items-center gap-3 transition-all duration-300"
+          onClick={onClose}
+        >
+          <Icon iconName="Work" className="text-lg text-emerald-600" />
+          <span>Trabajadores</span>
+        </Link>
+      </SidebarSection>
+
+      <SidebarSection
         title="Administración"
         iconName="Settings"
         isOpen={openSection === "administracion"}

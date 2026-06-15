@@ -11,6 +11,7 @@ export default function SidebarRecepcionista({ onClose, usuario }) {
   const showPacientes = can("ver_pacientes") || can("ver_lista_consultas") || can("ver_recordatorios_citas");
   const showPersonal = can("ver_medicos") || can("ver_panel_enfermeria") || can("ver_panel_laboratorio") || can("ver_modulo_quimico");
   const showInventario = can("ver_inventario_general") || can("ver_inventario_laboratorio");
+  const showOcupacional = can("access_salud_ocupacional") && (can("gestionar_empresas_ocupacional") || can("registrar_trabajadores_ocupacional") || can("baja_trabajadores_ocupacional"));
   const showAdministracion = can("ver_usuarios") || can("ver_configuracion") || can("ver_plantillas_hc") || can("ver_tema");
   const showWeb = can("ver_web_servicios") || can("ver_web_ofertas") || can("ver_web_banners");
 
@@ -214,6 +215,36 @@ export default function SidebarRecepcionista({ onClose, usuario }) {
             >
               <Icon iconName="TestBeaker" className="text-lg text-purple-600" />
               <span>Inventario Lab</span>
+            </Link>
+          )}
+        </SidebarSection>
+      )}
+
+      {showOcupacional && (
+        <SidebarSection
+          title="Salud Ocupacional"
+          iconName="Medical"
+          isOpen={openSection === "ocupacional"}
+          onToggle={() => handleToggleSection("ocupacional")}
+        >
+          {can("gestionar_empresas_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/empresas"
+              className="py-2.5 px-3 rounded-lg text-cyan-700 hover:bg-gradient-to-r hover:from-cyan-50 hover:to-sky-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="CityNext" className="text-lg text-cyan-600" />
+              <span>Empresas</span>
+            </Link>
+          )}
+          {can("registrar_trabajadores_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/trabajadores"
+              className="py-2.5 px-3 rounded-lg text-emerald-700 hover:bg-gradient-to-r hover:from-emerald-50 hover:to-teal-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="Work" className="text-lg text-emerald-600" />
+              <span>Trabajadores</span>
             </Link>
           )}
         </SidebarSection>
