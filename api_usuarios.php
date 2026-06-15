@@ -5,6 +5,10 @@ require_once __DIR__ . '/config.php';
 
 function permisosPermitidosRecepcion() {
     return [
+        'access_salud_ocupacional',
+        'gestionar_empresas_ocupacional',
+        'registrar_trabajadores_ocupacional',
+        'baja_trabajadores_ocupacional',
         'ver_pacientes',
         'ver_usuarios',
         'ver_medicos',

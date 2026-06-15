@@ -126,6 +126,8 @@ const OrdenesImagenPacientePage = lazy(() => import("./pages/OrdenesImagenPacien
 const VisorImagenPage = lazy(() => import("./pages/VisorImagenPage.jsx"));
 const SolicitudImagenPage = lazy(() => import("./pages/SolicitudImagenPage.jsx"));
 const ContratosPage = lazy(() => import("./pages/ContratosPage.jsx"));
+const EmpresasOcupacionalesPage = lazy(() => import("./pages/ocupacional/EmpresasOcupacionalesPage.jsx"));
+const TrabajadoresOcupacionalesPage = lazy(() => import("./pages/ocupacional/TrabajadoresOcupacionalesPage.jsx"));
 
 // Reinicia el ErrorBoundary en cada cambio de ruta para que errores de una
 // página no persistan al navegar a otra (ej. presionar el botón Back).
@@ -659,6 +661,8 @@ function App() {
       case "enfermero":
         return "/panel-enfermero";
       case "recepcionista":
+        if (hasPermiso(usuario, "access_salud_ocupacional") && hasPermiso(usuario, "gestionar_empresas_ocupacional")) return "/salud-ocupacional/empresas";
+        if (hasPermiso(usuario, "access_salud_ocupacional") && hasPermiso(usuario, "registrar_trabajadores_ocupacional")) return "/salud-ocupacional/trabajadores";
         if (hasPermiso(usuario, "ver_pacientes")) return "/pacientes";
         if (hasPermiso(usuario, "ver_usuarios")) return "/usuarios";
         if (hasPermiso(usuario, "ver_medicos")) return "/medicos";
@@ -1118,6 +1122,30 @@ function App() {
                     element={
                       <ProtectedRoute usuario={usuario} rolesPermitidos={["administrador", "recepcionista"]} permisosRequeridos={["ver_web_banners"]}>
                         <WebBannersCrudPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/empresas"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "gestionar_empresas_ocupacional"]}
+                      >
+                        <EmpresasOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/trabajadores"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "registrar_trabajadores_ocupacional"]}
+                      >
+                        <TrabajadoresOcupacionalesPage />
                       </ProtectedRoute>
                     }
                   />

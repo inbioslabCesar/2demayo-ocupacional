@@ -1,4 +1,8 @@
 export const RECEPCION_PERMISOS = [
+  { key: "access_salud_ocupacional", label: "Acceso Salud Ocupacional" },
+  { key: "gestionar_empresas_ocupacional", label: "Gestionar Empresas Ocupacional" },
+  { key: "registrar_trabajadores_ocupacional", label: "Registrar Trabajadores Ocupacional" },
+  { key: "baja_trabajadores_ocupacional", label: "Baja de Trabajadores Ocupacional" },
   { key: "ver_pacientes", label: "Pacientes" },
   { key: "ver_usuarios", label: "Usuarios" },
   { key: "ver_medicos", label: "Medicos / registrar medico" },
@@ -26,6 +30,8 @@ export const RECEPCION_PERMISOS = [
 // Compatibilidad para recepcionistas antiguos (sin permisos persistidos):
 // solo se habilitan los modulos historicamente visibles en su sidebar.
 export const RECEPCION_PERMISOS_LEGACY = [
+  "access_salud_ocupacional",
+  "registrar_trabajadores_ocupacional",
   "ver_pacientes",
   "ver_contabilidad",
   "ver_paquetes_perfiles",
