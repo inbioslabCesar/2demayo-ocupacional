@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual de Capacitacion - Salud Ocupacional Fase 1 + Fase 2</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --paper: #ffffff;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --brand: #0f766e;
+      --line: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #eef6f9 0%, #f7fafc 100%);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+    .wrap {
+      max-width: 900px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    .paper {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 28px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+    }
+    h1, h2, h3 {
+      color: #0b4f4a;
+      margin-top: 1.2em;
+      margin-bottom: 0.45em;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.9rem;
+      border-bottom: 2px solid #d1e7e5;
+      padding-bottom: 10px;
+    }
+    h2 { font-size: 1.35rem; }
+    h3 { font-size: 1.08rem; }
+    p, li { font-size: 0.98rem; }
+    .meta {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-bottom: 14px;
+    }
+    .tip {
+      border-left: 4px solid var(--brand);
+      background: #effcf9;
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin: 12px 0;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid var(--line);
+      margin: 18px 0;
+    }
+    ol, ul { padding-left: 22px; }
+    @media print {
+      body { background: #fff; }
+      .wrap { margin: 0; max-width: none; }
+      .paper { border: none; box-shadow: none; padding: 0; }
+      @page { size: A4; margin: 18mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <article class="paper">
+      <h1>Manual de Capacitacion - Salud Ocupacional (Fase 1 + Fase 2)</h1>
+      <p class="meta">Fecha: 2026-06-15 | Version: 2.0 | Dirigido a personal administrativo y operativo</p>
+
+      <h2>1. Objetivo</h2>
+      <p>Capacitar al personal en el uso completo del modulo desde Fase 1 hasta Fase 2: empresas, trabajadores, examenes, catalogo, protocolos, montos y condiciones.</p>
+
+      <h2>2. Alcance por fase</h2>
+      <h3>Fase 1 - Base operativa</h3>
+      <ol>
+        <li>Empresas ocupacionales (registro/listado/inactivacion logica).</li>
+        <li>Trabajadores ocupacionales (verificacion, registro y baja logica).</li>
+        <li>Filtros, busqueda, paginacion y ordenamiento server-side.</li>
+        <li>Permisos y rutas protegidas del modulo.</li>
+      </ol>
+
+      <h3>Fase 2 - Parametrizacion ocupacional</h3>
+      <ol>
+        <li>Examenes generales (alta, edicion, inactivacion).</li>
+        <li>Catalogo de examenes por empresa (ON/OFF).</li>
+        <li>Protocolos PRE/PER/POST por empresa.</li>
+        <li>Matriz de montos y totalizadores.</li>
+        <li>Condiciones por examen (crear, editar, eliminar).</li>
+      </ol>
+
+      <h2>3. Flujo completo recomendado (F1 + F2)</h2>
+      <ol>
+        <li>Registrar empresa.</li>
+        <li>Registrar examen general.</li>
+        <li>Activar examen en catalogo de empresa.</li>
+        <li>Crear protocolo.</li>
+        <li>Asignar montos PRE/PER/POST.</li>
+        <li>Definir condiciones por examen.</li>
+        <li>Verificar identidad del trabajador.</li>
+        <li>Registrar trabajador ocupacional.</li>
+        <li>Dar de baja trabajador cuando corresponda.</li>
+      </ol>
+
+      <h2>4. Guia paso a paso</h2>
+
+      <h3>Paso 1 (Fase 1): Empresas</h3>
+      <p>Menu Salud Ocupacional - Empresas. Registrar RUC y razon social, guardar y validar presencia en listado.</p>
+
+      <h3>Paso 2 (Fase 2): Examenes Generales</h3>
+      <p>Menu Salud Ocupacional - Examenes Generales. Crear codigo, nombre y descripcion del examen, luego validar estado activo.</p>
+
+      <h3>Paso 3 (Fase 2): Catalogo de Examenes</h3>
+      <p>Seleccionar empresa y cambiar ON los examenes requeridos para habilitar su uso en protocolos.</p>
+
+      <h3>Paso 4 (Fase 2): Protocolos</h3>
+      <p>Seleccionar empresa, tipo PRE/PER/POST, nombre del protocolo y guardar.</p>
+
+      <h3>Paso 5 (Fase 2): Matriz de montos</h3>
+      <p>Ingresar montos por examen en PRE/PER/POST y validar fila TOTAL.</p>
+
+      <h3>Paso 6 (Fase 2): Condiciones por examen</h3>
+      <p>Configurar puesto, sexo y edades. Se puede crear, editar y eliminar.</p>
+
+      <h3>Paso 7 (Fase 1): Verificar identidad y registrar trabajador</h3>
+      <p>Ingresar documento, verificar identidad y completar empresa, puesto, riesgo, contrato y fecha de ingreso. Registrar y validar estado activo.</p>
+
+      <h3>Paso 8 (Fase 1): Baja de trabajador</h3>
+      <p>En listado, usar Dar baja, confirmar dialogo y validar estado retirado.</p>
+
+      <div class="tip">
+        <strong>Tip de capacitacion:</strong> ejecutar una simulacion completa por usuario y cerrar con checklist de aprobacion.
+      </div>
+
+      <h2>5. Checklist de aprobacion (Fase 1 + Fase 2)</h2>
+      <ol>
+        <li>Empresa registrada y visible.</li>
+        <li>Examen general registrado.</li>
+        <li>Examen activo en catalogo.</li>
+        <li>Protocolo creado.</li>
+        <li>Monto guardado en matriz.</li>
+        <li>Totalizador correcto.</li>
+        <li>Condicion creada.</li>
+        <li>Condicion editada.</li>
+        <li>Condicion eliminada.</li>
+        <li>Identidad de trabajador verificada.</li>
+        <li>Trabajador registrado activo.</li>
+        <li>Trabajador dado de baja (retirado).</li>
+      </ol>
+
+      <h2>6. Errores frecuentes</h2>
+      <ul>
+        <li>No permite registrar trabajador: falta verificacion de identidad o campos obligatorios.</li>
+        <li>Examen no aparece en protocolo: revisar que este ON en catalogo de empresa.</li>
+        <li>Montos no actualizan total: confirmar guardado y recargar pantalla.</li>
+        <li>No veo registros: revisar filtros de empresa, estado y busqueda.</li>
+      </ul>
+
+      <hr />
+      <p><strong>Uso como PDF:</strong> abrir este archivo en el navegador, presionar Ctrl+P y elegir Guardar como PDF.</p>
+      <p><strong>Uso en Word:</strong> abrir el archivo .md del manual y copiar/pegar en Word.</p>
+    </article>
+  </div>
+</body>
+</html>

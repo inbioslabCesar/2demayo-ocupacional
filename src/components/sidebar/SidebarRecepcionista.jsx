@@ -247,6 +247,36 @@ export default function SidebarRecepcionista({ onClose, usuario }) {
               <span>Trabajadores</span>
             </Link>
           )}
+          {can("gestionar_empresas_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/examenes-generales"
+              className="py-2.5 px-3 rounded-lg text-blue-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="TestBeaker" className="text-lg text-blue-600" />
+              <span>Exámenes Generales</span>
+            </Link>
+          )}
+          {can("gestionar_empresas_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/catalogo-examenes"
+              className="py-2.5 px-3 rounded-lg text-violet-700 hover:bg-gradient-to-r hover:from-violet-50 hover:to-fuchsia-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="Switch" className="text-lg text-violet-600" />
+              <span>Catálogo por Empresa</span>
+            </Link>
+          )}
+          {can("gestionar_empresas_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/protocolos"
+              className="py-2.5 px-3 rounded-lg text-rose-700 hover:bg-gradient-to-r hover:from-rose-50 hover:to-orange-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="BulletedTreeList" className="text-lg text-rose-600" />
+              <span>Protocolos</span>
+            </Link>
+          )}
         </SidebarSection>
       )}
 

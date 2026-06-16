@@ -38,6 +38,12 @@ debug_session*.txt
 session_debug.php
 *.sql.backup
 /sql/
+!/sql/
+/sql/**
+!/sql/2026-06-15_ocupacional_fase2_examenes_generales.sql
+!/sql/2026-06-15_ocupacional_fase2_catalogo_empresa_examenes.sql
+!/sql/2026-06-15_ocupacional_fase2_protocolos.sql
+!/sql/2026-06-15_ocupacional_fase2_protocolo_condiciones.sql
 backup/
 uploads/
 # Permitir versionar carpetas vacías necesarias para hosting

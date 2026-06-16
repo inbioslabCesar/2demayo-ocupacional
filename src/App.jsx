@@ -128,6 +128,9 @@ const SolicitudImagenPage = lazy(() => import("./pages/SolicitudImagenPage.jsx")
 const ContratosPage = lazy(() => import("./pages/ContratosPage.jsx"));
 const EmpresasOcupacionalesPage = lazy(() => import("./pages/ocupacional/EmpresasOcupacionalesPage.jsx"));
 const TrabajadoresOcupacionalesPage = lazy(() => import("./pages/ocupacional/TrabajadoresOcupacionalesPage.jsx"));
+const ExamenesOcupacionalesPage = lazy(() => import("./pages/ocupacional/ExamenesOcupacionalesPage.jsx"));
+const CatalogoEmpresaExamenesPage = lazy(() => import("./pages/ocupacional/CatalogoEmpresaExamenesPage.jsx"));
+const ProtocolosOcupacionalesPage = lazy(() => import("./pages/ocupacional/ProtocolosOcupacionalesPage.jsx"));
 
 // Reinicia el ErrorBoundary en cada cambio de ruta para que errores de una
 // página no persistan al navegar a otra (ej. presionar el botón Back).
@@ -1146,6 +1149,42 @@ function App() {
                         permisosRequeridos={["access_salud_ocupacional", "registrar_trabajadores_ocupacional"]}
                       >
                         <TrabajadoresOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/examenes-generales"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "gestionar_empresas_ocupacional"]}
+                      >
+                        <ExamenesOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/catalogo-examenes"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "gestionar_empresas_ocupacional"]}
+                      >
+                        <CatalogoEmpresaExamenesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/protocolos"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "gestionar_empresas_ocupacional"]}
+                      >
+                        <ProtocolosOcupacionalesPage />
                       </ProtectedRoute>
                     }
                   />
