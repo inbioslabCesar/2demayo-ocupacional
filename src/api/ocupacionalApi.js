@@ -382,3 +382,229 @@ export async function eliminarCondicionProtocoloOcupacional(id) {
   const payload = await parseJsonOrThrow(response);
   return payload;
 }
+
+export async function previsualizarOrdenOcupacional({
+  empresaId,
+  trabajadorId,
+  protocoloId,
+  tipoEvaluacionId,
+} = {}) {
+  const params = new URLSearchParams({
+    accion: "previsualizar",
+    empresa_id: String(empresaId || 0),
+    trabajador_id: String(trabajadorId || 0),
+    protocolo_id: String(protocoloId || 0),
+    tipo_evaluacion_id: String(tipoEvaluacionId || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function registrarOrdenOcupacional({
+  empresaId,
+  trabajadorId,
+  protocoloId,
+  tipoEvaluacionId,
+  fechaOrden,
+  observacion,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "registrar_orden",
+      empresa_id: Number(empresaId),
+      trabajador_id: Number(trabajadorId),
+      protocolo_id: Number(protocoloId),
+      tipo_evaluacion_id: Number(tipoEvaluacionId),
+      fecha_orden: String(fechaOrden || "").trim(),
+      observacion: String(observacion || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function listarOrdenesOcupacionalesPaginado({
+  empresaId = 0,
+  estado = "",
+  tipo = "",
+  fechaDesde = "",
+  fechaHasta = "",
+  q = "",
+  page = 1,
+  perPage = 20,
+} = {}) {
+  const params = new URLSearchParams({
+    accion: "listar_ordenes",
+    q,
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (Number(empresaId) > 0) {
+    params.set("empresa_id", String(empresaId));
+  }
+  if (String(estado || "").trim() !== "") {
+    params.set("estado", String(estado).trim());
+  }
+  if (String(tipo || "").trim() !== "") {
+    params.set("tipo", String(tipo).trim());
+  }
+  if (String(fechaDesde || "").trim() !== "") {
+    params.set("fecha_desde", String(fechaDesde).trim());
+  }
+  if (String(fechaHasta || "").trim() !== "") {
+    params.set("fecha_hasta", String(fechaHasta).trim());
+  }
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return {
+    data: payload.data || [],
+    meta: payload.meta || { page, per_page: perPage, total: 0, total_pages: 0 },
+  };
+}
+
+export async function obtenerDetalleOrdenOcupacional(id) {
+  const params = new URLSearchParams({
+    accion: "detalle_orden",
+    id: String(Number(id) || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function anularOrdenOcupacional(id, motivo = "") {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ accion: "anular_orden", id: Number(id), motivo: String(motivo || "").trim() }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload;
+}
+
+export async function cerrarOrdenOcupacional(id) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ accion: "cerrar_orden", id: Number(id) }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload;
+}
+
+export async function guardarAptitudOrdenOcupacional({
+  id,
+  aptitudFinal,
+  restriccionFinal,
+  recomendacionFinal,
+  medicoResponsable,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar_aptitud_orden",
+      id: Number(id),
+      aptitud_final: String(aptitudFinal || "").trim(),
+      restriccion_final: String(restriccionFinal || "").trim(),
+      recomendacion_final: String(recomendacionFinal || "").trim(),
+      medico_responsable: String(medicoResponsable || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function actualizarDetalleOrdenOcupacional({
+  detalleId,
+  estadoEjecucion,
+  observacionEjecucion,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "actualizar_detalle_orden",
+      detalle_id: Number(detalleId),
+      estado_ejecucion: String(estadoEjecucion || "").trim(),
+      observacion_ejecucion: String(observacionEjecucion || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function listarEventosOrdenOcupacional({
+  ordenId,
+  tipo = "",
+  fechaDesde = "",
+  fechaHasta = "",
+  limit = 100,
+} = {}) {
+  const params = new URLSearchParams({
+    accion: "eventos_orden",
+    id: String(Number(ordenId) || 0),
+    limit: String(Number(limit) || 100),
+  });
+  if (String(tipo || "").trim() !== "") {
+    params.set("tipo", String(tipo).trim());
+  }
+  if (String(fechaDesde || "").trim() !== "") {
+    params.set("fecha_desde", String(fechaDesde).trim());
+  }
+  if (String(fechaHasta || "").trim() !== "") {
+    params.set("fecha_hasta", String(fechaHasta).trim());
+  }
+
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function obtenerResumenOrdenesOcupacionales({
+  empresaId = 0,
+  estado = "",
+  tipo = "",
+  fechaDesde = "",
+  fechaHasta = "",
+  q = "",
+} = {}) {
+  const params = new URLSearchParams({ accion: "resumen_ordenes", q });
+  if (Number(empresaId) > 0) params.set("empresa_id", String(empresaId));
+  if (String(estado || "").trim() !== "") params.set("estado", String(estado).trim());
+  if (String(tipo || "").trim() !== "") params.set("tipo", String(tipo).trim());
+  if (String(fechaDesde || "").trim() !== "") params.set("fecha_desde", String(fechaDesde).trim());
+  if (String(fechaHasta || "").trim() !== "") params.set("fecha_hasta", String(fechaHasta).trim());
+
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
+}
+
+export async function obtenerReporteOrdenesOcupacionales({
+  empresaId = 0,
+  estado = "",
+  tipo = "",
+  fechaDesde = "",
+  fechaHasta = "",
+  q = "",
+  limit = 2000,
+} = {}) {
+  const params = new URLSearchParams({
+    accion: "reporte_ordenes",
+    q,
+    limit: String(Number(limit) || 2000),
+  });
+  if (Number(empresaId) > 0) params.set("empresa_id", String(empresaId));
+  if (String(estado || "").trim() !== "") params.set("estado", String(estado).trim());
+  if (String(tipo || "").trim() !== "") params.set("tipo", String(tipo).trim());
+  if (String(fechaDesde || "").trim() !== "") params.set("fecha_desde", String(fechaDesde).trim());
+  if (String(fechaHasta || "").trim() !== "") params.set("fecha_hasta", String(fechaHasta).trim());
+
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}

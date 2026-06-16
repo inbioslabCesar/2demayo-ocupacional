@@ -131,6 +131,7 @@ const TrabajadoresOcupacionalesPage = lazy(() => import("./pages/ocupacional/Tra
 const ExamenesOcupacionalesPage = lazy(() => import("./pages/ocupacional/ExamenesOcupacionalesPage.jsx"));
 const CatalogoEmpresaExamenesPage = lazy(() => import("./pages/ocupacional/CatalogoEmpresaExamenesPage.jsx"));
 const ProtocolosOcupacionalesPage = lazy(() => import("./pages/ocupacional/ProtocolosOcupacionalesPage.jsx"));
+const OrdenesOcupacionalesPage = lazy(() => import("./pages/ocupacional/OrdenesOcupacionalesPage.jsx"));
 
 // Reinicia el ErrorBoundary en cada cambio de ruta para que errores de una
 // página no persistan al navegar a otra (ej. presionar el botón Back).
@@ -1185,6 +1186,18 @@ function App() {
                         permisosRequeridos={["access_salud_ocupacional", "gestionar_empresas_ocupacional"]}
                       >
                         <ProtocolosOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/ordenes"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "registrar_trabajadores_ocupacional"]}
+                      >
+                        <OrdenesOcupacionalesPage />
                       </ProtectedRoute>
                     }
                   />

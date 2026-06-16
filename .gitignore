@@ -44,6 +44,10 @@ session_debug.php
 !/sql/2026-06-15_ocupacional_fase2_catalogo_empresa_examenes.sql
 !/sql/2026-06-15_ocupacional_fase2_protocolos.sql
 !/sql/2026-06-15_ocupacional_fase2_protocolo_condiciones.sql
+!/sql/2026-06-15_ocupacional_fase3_ordenes.sql
+!/sql/2026-06-16_ocupacional_fase3_ejecucion_ordenes.sql
+!/sql/2026-06-16_ocupacional_fase3_cierre_auditoria.sql
+!/sql/2026-06-16_ocupacional_fase3_aptitud_certificado.sql
 backup/
 uploads/
 # Permitir versionar carpetas vacías necesarias para hosting

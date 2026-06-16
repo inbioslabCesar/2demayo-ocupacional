@@ -277,6 +277,16 @@ export default function SidebarRecepcionista({ onClose, usuario }) {
               <span>Protocolos</span>
             </Link>
           )}
+          {can("registrar_trabajadores_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/ordenes"
+              className="py-2.5 px-3 rounded-lg text-amber-700 hover:bg-gradient-to-r hover:from-amber-50 hover:to-yellow-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="BulletedTreeList" className="text-lg text-amber-600" />
+              <span>Ordenes</span>
+            </Link>
+          )}
         </SidebarSection>
       )}
 
