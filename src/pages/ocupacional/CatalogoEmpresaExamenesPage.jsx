@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listarEmpresasOcupacionales,
   listarCatalogoEmpresaExamenesPaginado,
@@ -21,6 +21,7 @@ export default function CatalogoEmpresaExamenesPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [updatingKey, setUpdatingKey] = useState("");
+  const requestRef = useRef(0);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -49,9 +50,11 @@ export default function CatalogoEmpresaExamenesPage() {
   const cargarCatalogo = useCallback(async () => {
     if (!empresaId) {
       setRows([]);
+      setMeta({ page: 1, per_page: perPage, total: 0, total_pages: 0 });
       return;
     }
 
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
     try {
@@ -62,12 +65,19 @@ export default function CatalogoEmpresaExamenesPage() {
         page,
         perPage,
       });
+      if (requestId !== requestRef.current) {
+        return;
+      }
       setRows(payload.data || []);
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
     } catch (err) {
-      setError(err.message || "No se pudo cargar catalogo");
+      if (requestId === requestRef.current) {
+        setError(err.message || "No se pudo cargar catalogo");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) {
+        setLoading(false);
+      }
     }
   }, [empresaId, estadoCatalogo, qDebounced, page, perPage]);
 

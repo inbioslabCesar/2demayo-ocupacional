@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listarEmpresasOcupacionales,
   listarProtocolosOcupacionales,
@@ -71,6 +71,7 @@ export default function OrdenesOcupacionalesPage() {
   const [meta, setMeta] = useState({ page: 1, per_page: 20, total: 0, total_pages: 0 });
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(20);
+  const [empresaFiltroId, setEmpresaFiltroId] = useState(0);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
@@ -134,6 +135,8 @@ export default function OrdenesOcupacionalesPage() {
     observacion: "",
     datosJsonText: "{}",
   });
+  const ordenesRequestRef = useRef(0);
+  const resumenRequestRef = useRef(0);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -228,11 +231,12 @@ export default function OrdenesOcupacionalesPage() {
   }, [cargarTrabajadores, cargarProtocolos]);
 
   const cargarOrdenes = useCallback(async () => {
+    const requestId = ++ordenesRequestRef.current;
     setLoading(true);
     setError("");
     try {
       const payload = await listarOrdenesOcupacionalesPaginado({
-        empresaId,
+        empresaId: empresaFiltroId,
         estado: filtroEstado,
         tipo: filtroTipo,
         fechaDesde: filtroFechaDesde,
@@ -241,38 +245,56 @@ export default function OrdenesOcupacionalesPage() {
         page,
         perPage,
       });
+      if (requestId !== ordenesRequestRef.current) {
+        return;
+      }
       setRows(payload.data || []);
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
     } catch (err) {
+      if (requestId !== ordenesRequestRef.current) {
+        return;
+      }
       setError(err.message || "No se pudo cargar ordenes");
     } finally {
-      setLoading(false);
+      if (requestId === ordenesRequestRef.current) {
+        setLoading(false);
+      }
     }
-  }, [empresaId, filtroEstado, filtroTipo, filtroFechaDesde, filtroFechaHasta, qDebounced, page, perPage]);
+  }, [empresaFiltroId, filtroEstado, filtroTipo, filtroFechaDesde, filtroFechaHasta, qDebounced, page, perPage]);
 
   useEffect(() => {
     cargarOrdenes();
   }, [cargarOrdenes]);
 
   const cargarResumen = useCallback(async () => {
+    const requestId = ++resumenRequestRef.current;
     try {
       const data = await obtenerResumenOrdenesOcupacionales({
-        empresaId,
+        empresaId: empresaFiltroId,
         estado: filtroEstado,
         tipo: filtroTipo,
         fechaDesde: filtroFechaDesde,
         fechaHasta: filtroFechaHasta,
         q: qDebounced,
       });
+      if (requestId !== resumenRequestRef.current) {
+        return;
+      }
       setResumen(data);
     } catch {
-      setResumen(null);
+      if (requestId === resumenRequestRef.current) {
+        setResumen(null);
+      }
     }
-  }, [empresaId, filtroEstado, filtroTipo, filtroFechaDesde, filtroFechaHasta, qDebounced]);
+  }, [empresaFiltroId, filtroEstado, filtroTipo, filtroFechaDesde, filtroFechaHasta, qDebounced]);
 
   useEffect(() => {
     cargarResumen();
   }, [cargarResumen]);
+
+  const recargarListadoYResumen = useCallback(async () => {
+    await Promise.all([cargarOrdenes(), cargarResumen()]);
+  }, [cargarOrdenes, cargarResumen]);
 
   const canPreview = useMemo(() => {
     return empresaId > 0 && trabajadorId > 0 && protocoloId > 0 && tipoEvaluacionId > 0;
@@ -324,7 +346,7 @@ export default function OrdenesOcupacionalesPage() {
 
       setMessage(`Orden registrada: ${data.codigo} (${data.total_items} examenes)`);
       setObservacion("");
-      await cargarOrdenes();
+      await recargarListadoYResumen();
     } catch (err) {
       setError(err.message || "No se pudo registrar la orden");
     } finally {
@@ -975,7 +997,7 @@ export default function OrdenesOcupacionalesPage() {
         observacionEjecucion: form.observacion,
       });
       await recargarDetalleModal(detalleModalData.id);
-      await cargarOrdenes();
+      await recargarListadoYResumen();
       setMessage(`Detalle actualizado (${itemId})`);
     } catch (err) {
       const msg = err.message || "No se pudo actualizar estado del examen";
@@ -1131,7 +1153,7 @@ export default function OrdenesOcupacionalesPage() {
     try {
       await anularOrdenOcupacional(row.id, motivo);
       setMessage(`Orden anulada: ${row.codigo}`);
-      await cargarOrdenes();
+      await recargarListadoYResumen();
     } catch (err) {
       setError(err.message || "No se pudo anular la orden");
     } finally {
@@ -1163,7 +1185,7 @@ export default function OrdenesOcupacionalesPage() {
     try {
       await cerrarOrdenOcupacional(row.id);
       setMessage(`Orden cerrada: ${row.codigo}`);
-      await cargarOrdenes();
+      await recargarListadoYResumen();
     } catch (err) {
       setError(err.message || "No se pudo cerrar la orden");
     } finally {
@@ -1176,7 +1198,7 @@ export default function OrdenesOcupacionalesPage() {
     setError("");
     try {
       const dataset = await obtenerReporteOrdenesOcupacionales({
-        empresaId,
+        empresaId: empresaFiltroId,
         estado: filtroEstado,
         tipo: filtroTipo,
         fechaDesde: filtroFechaDesde,
@@ -1221,7 +1243,7 @@ export default function OrdenesOcupacionalesPage() {
     setError("");
     try {
       const dataset = await obtenerReporteOrdenesOcupacionales({
-        empresaId,
+        empresaId: empresaFiltroId,
         estado: filtroEstado,
         tipo: filtroTipo,
         fechaDesde: filtroFechaDesde,
@@ -1427,7 +1449,21 @@ export default function OrdenesOcupacionalesPage() {
           </select>
         </div>
 
-        <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-6">
+        <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-7">
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={empresaFiltroId}
+            onChange={(e) => {
+              setEmpresaFiltroId(Number(e.target.value));
+              setPage(1);
+            }}
+          >
+            <option value={0}>Todas las empresas</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>{empresa.razon_social}</option>
+            ))}
+          </select>
+
           <select
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             value={filtroEstado}

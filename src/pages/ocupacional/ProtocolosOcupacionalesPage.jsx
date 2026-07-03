@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listarEmpresasOcupacionales,
   listarPlantillasCondicionesOcupacionales,
@@ -65,6 +65,8 @@ export default function ProtocolosOcupacionalesPage() {
   const [condBulkSaving, setCondBulkSaving] = useState(false);
   const [condBulkMsg, setCondBulkMsg] = useState("");
   const [condBulkPreviewMsg, setCondBulkPreviewMsg] = useState("");
+  const protocolosRequestRef = useRef(0);
+  const matrizRequestRef = useRef(0);
   const [condForm, setCondForm] = useState({
     puesto_trabajo: "",
     sexo: "",
@@ -122,14 +124,20 @@ export default function ProtocolosOcupacionalesPage() {
       return;
     }
 
+    const requestId = ++protocolosRequestRef.current;
     try {
       const data = await listarProtocolosOcupacionales({ empresaId, estado: "activo" });
+      if (requestId !== protocolosRequestRef.current) {
+        return;
+      }
       setProtocolos(data);
       if (!data.find((p) => Number(p.id) === Number(protocoloId))) {
         setProtocoloId(data.length ? Number(data[0].id) : 0);
       }
     } catch (err) {
-      setError(err.message || "No se pudo cargar protocolos");
+      if (requestId === protocolosRequestRef.current) {
+        setError(err.message || "No se pudo cargar protocolos");
+      }
     }
   }, [empresaId, protocoloId]);
 
@@ -165,9 +173,11 @@ export default function ProtocolosOcupacionalesPage() {
       setRows([]);
       setTipos([]);
       setTotales({});
+      setMeta({ page: 1, per_page: perPage, total: 0, total_pages: 0 });
       return;
     }
 
+    const requestId = ++matrizRequestRef.current;
     setLoading(true);
     setError("");
     try {
@@ -178,14 +188,21 @@ export default function ProtocolosOcupacionalesPage() {
         page,
         perPage,
       });
+      if (requestId !== matrizRequestRef.current) {
+        return;
+      }
       setTipos(payload.tipos || []);
       setRows(payload.data || []);
       setTotales(payload.totales || {});
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
     } catch (err) {
-      setError(err.message || "No se pudo cargar matriz de protocolo");
+      if (requestId === matrizRequestRef.current) {
+        setError(err.message || "No se pudo cargar matriz de protocolo");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === matrizRequestRef.current) {
+        setLoading(false);
+      }
     }
   }, [empresaId, protocoloId, qDebounced, page, perPage]);
 

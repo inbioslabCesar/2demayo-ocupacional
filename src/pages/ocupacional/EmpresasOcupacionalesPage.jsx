@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { inactivarEmpresaOcupacional, listarEmpresasOcupacionalesPaginado } from "../../api/ocupacionalApi";
 import FormEmpresa from "./FormEmpresa";
 
@@ -14,6 +14,7 @@ export default function EmpresasOcupacionalesPage() {
   const [empresas, setEmpresas] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const requestRef = useRef(0);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -24,6 +25,7 @@ export default function EmpresasOcupacionalesPage() {
   }, [q]);
 
   const loadEmpresas = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
     try {
@@ -35,12 +37,19 @@ export default function EmpresasOcupacionalesPage() {
         sortBy,
         sortDir,
       });
+      if (requestId !== requestRef.current) {
+        return;
+      }
       setEmpresas(payload.data || []);
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
     } catch (err) {
-      setError(err.message || "No se pudo cargar empresas");
+      if (requestId === requestRef.current) {
+        setError(err.message || "No se pudo cargar empresas");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) {
+        setLoading(false);
+      }
     }
   }, [estado, qDebounced, page, perPage, sortBy, sortDir]);
 

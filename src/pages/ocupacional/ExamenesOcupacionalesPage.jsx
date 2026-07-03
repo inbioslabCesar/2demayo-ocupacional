@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   inactivarExamenOcupacional,
   listarExamenesOcupacionalesPaginado,
@@ -18,6 +18,7 @@ export default function ExamenesOcupacionalesPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null);
+  const requestRef = useRef(0);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -28,6 +29,7 @@ export default function ExamenesOcupacionalesPage() {
   }, [q]);
 
   const loadRows = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
     try {
@@ -39,12 +41,19 @@ export default function ExamenesOcupacionalesPage() {
         sortBy,
         sortDir,
       });
+      if (requestId !== requestRef.current) {
+        return;
+      }
       setRows(payload.data || []);
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
     } catch (err) {
-      setError(err.message || "No se pudo cargar examenes ocupacionales");
+      if (requestId === requestRef.current) {
+        setError(err.message || "No se pudo cargar examenes ocupacionales");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) {
+        setLoading(false);
+      }
     }
   }, [estado, qDebounced, page, perPage, sortBy, sortDir]);
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   darBajaTrabajadorOcupacional,
   listarEmpresasOcupacionales,
@@ -20,6 +20,7 @@ export default function TrabajadoresOcupacionalesPage() {
   const [trabajadores, setTrabajadores] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const requestRef = useRef(0);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -53,6 +54,7 @@ export default function TrabajadoresOcupacionalesPage() {
   }, []);
 
   const loadTrabajadores = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
     try {
@@ -65,12 +67,19 @@ export default function TrabajadoresOcupacionalesPage() {
         sortBy,
         sortDir,
       });
+      if (requestId !== requestRef.current) {
+        return;
+      }
       setTrabajadores(payload.data || []);
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
     } catch (err) {
-      setError(err.message || "No se pudo cargar trabajadores");
+      if (requestId === requestRef.current) {
+        setError(err.message || "No se pudo cargar trabajadores");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) {
+        setLoading(false);
+      }
     }
   }, [estado, empresaId, qDebounced, page, perPage, sortBy, sortDir]);
 
