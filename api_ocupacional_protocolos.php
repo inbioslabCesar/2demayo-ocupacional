@@ -109,6 +109,35 @@ function listar_tipos_evaluacion_proto($conn)
     return $rows;
 }
 
+function listar_plantillas_condiciones_proto()
+{
+    return [
+        [
+            'codigo' => 'MAYOR_40_ECG',
+            'nombre' => 'Mayores de 40 - Electrocardiograma',
+            'descripcion' => 'Plantilla referencial editable para agregar electrocardiograma a pacientes desde 40 anios.',
+            'modo' => 'legacy_aditivo',
+            'reglas' => [
+                [
+                    'filtro_q' => 'electrocardiograma',
+                    'puesto_trabajo' => '',
+                    'sexo' => '',
+                    'edad_min' => 40,
+                    'edad_max' => null,
+                ],
+            ],
+        ],
+    ];
+}
+
+function parse_bool_proto($value)
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+    return in_array(strtolower(trim((string)$value)), ['1', 'true', 'si', 'yes', 'on'], true);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     require_ocup_permiso_proto('gestionar_empresas_ocupacional');
 
@@ -116,6 +145,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     if ($accion === 'tipos') {
         out_proto(200, ['success' => true, 'data' => listar_tipos_evaluacion_proto($mysqliOcup)]);
+    }
+
+    if ($accion === 'listar_plantillas_condiciones') {
+        out_proto(200, ['success' => true, 'data' => listar_plantillas_condiciones_proto()]);
     }
 
     if ($accion === 'listar_protocolos') {
@@ -257,7 +290,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $tipos = listar_tipos_evaluacion_proto($mysqliOcup);
         foreach ($items as &$row) {
             foreach ($tipos as $t) {
-                $row['montos'][(string)$t['id']] = '';
+                $row['montos'][(string)$t['id']] = [
+                    'valor' => number_format((float)($row['precio'] ?? 0), 2, '.', ''),
+                    'origen' => 'examen_general',
+                ];
             }
         }
         unset($row);
@@ -279,7 +315,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     $cId = (int)$d['catalogo_id'];
                     $tId = (int)$d['tipo_evaluacion_id'];
                     if (isset($items[$cId])) {
-                        $items[$cId]['montos'][(string)$tId] = number_format((float)$d['monto'], 2, '.', '');
+                        $montoValor = (float)$d['monto'];
+                        $items[$cId]['montos'][(string)$tId] = [
+                            'valor' => $montoValor > 0 ? number_format($montoValor, 2, '.', '') : '',
+                            'origen' => $montoValor > 0 ? 'protocolo' : 'protocolo_excluido',
+                        ];
                     }
                 }
                 $stmtDet->close();
@@ -290,25 +330,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         foreach ($tipos as $t) {
             $totales[(string)$t['id']] = '0.00';
         }
-
-        $sqlTot = 'SELECT pd.tipo_evaluacion_id, COALESCE(SUM(pd.monto), 0) AS total
-                   FROM ocupacional_protocolo_detalle pd
-                   INNER JOIN ocupacional_catalogo_empresas c ON c.id = pd.catalogo_id
-                   INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
-                   WHERE pd.protocolo_id = ?
-                     AND c.empresa_id = ?
-                     AND c.estado = "activo"
-                     AND e.estado = "activo"
-                   GROUP BY pd.tipo_evaluacion_id';
-        $stmtTot = $mysqliOcup->prepare($sqlTot);
-        if ($stmtTot) {
-            $stmtTot->bind_param('ii', $protocoloId, $empresaId);
-            $stmtTot->execute();
-            $resTot = $stmtTot->get_result();
-            while ($tt = $resTot->fetch_assoc()) {
-                $totales[(string)((int)$tt['tipo_evaluacion_id'])] = number_format((float)$tt['total'], 2, '.', '');
+        foreach ($items as $row) {
+            foreach ($tipos as $t) {
+                $tipoKey = (string)$t['id'];
+                $totales[$tipoKey] = number_format(
+                    (float)$totales[$tipoKey] + (float)(($row['montos'][$tipoKey]['valor'] ?? 0)),
+                    2,
+                    '.',
+                    ''
+                );
             }
-            $stmtTot->close();
         }
 
         out_proto(200, [
@@ -415,6 +446,7 @@ if ($accion === 'guardar_protocolo') {
     $id = (int)($payload['id'] ?? 0);
     $empresaId = (int)($payload['empresa_id'] ?? 0);
     $descripcion = trim((string)($payload['descripcion'] ?? ''));
+    $sembrarMontosBase = parse_bool_proto($payload['sembrar_montos_base'] ?? true);
 
     if ($empresaId <= 0 || $descripcion === '') {
         out_proto(422, ['success' => false, 'error' => 'empresa_id y descripcion son obligatorios']);
@@ -468,9 +500,61 @@ if ($accion === 'guardar_protocolo') {
     $newId = (int)$stmt->insert_id;
     $stmt->close();
 
+    $montosBaseSembrados = 0;
+    if ($sembrarMontosBase) {
+        $tipos = listar_tipos_evaluacion_proto($mysqliOcup);
+        if (!empty($tipos)) {
+            $stmtCatalogo = $mysqliOcup->prepare('SELECT c.id AS catalogo_id, e.precio
+                                                  FROM ocupacional_catalogo_empresas c
+                                                  INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
+                                                  WHERE c.empresa_id = ?
+                                                    AND c.estado = "activo"
+                                                    AND e.estado = "activo"');
+            if ($stmtCatalogo) {
+                $stmtCatalogo->bind_param('i', $empresaId);
+                $stmtCatalogo->execute();
+                $resCatalogo = $stmtCatalogo->get_result();
+                $catalogos = [];
+                while ($row = $resCatalogo->fetch_assoc()) {
+                    $catalogos[] = [
+                        'catalogo_id' => (int)$row['catalogo_id'],
+                        'precio' => (float)($row['precio'] ?? 0),
+                    ];
+                }
+                $stmtCatalogo->close();
+
+                if (!empty($catalogos)) {
+                    $stmtSeed = $mysqliOcup->prepare('INSERT INTO ocupacional_protocolo_detalle
+                                                      (protocolo_id, catalogo_id, tipo_evaluacion_id, monto, created_by, updated_by)
+                                                      VALUES (?, ?, ?, ?, ?, ?)');
+                    if ($stmtSeed) {
+                        foreach ($catalogos as $catalogo) {
+                            foreach ($tipos as $tipo) {
+                                $catalogoId = (int)$catalogo['catalogo_id'];
+                                $tipoId = (int)$tipo['id'];
+                                $monto = (float)$catalogo['precio'];
+                                $stmtSeed->bind_param('iiidii', $newId, $catalogoId, $tipoId, $monto, $usuarioId, $usuarioId);
+                                $stmtSeed->execute();
+                                $montosBaseSembrados += ((int)$stmtSeed->affected_rows > 0) ? 1 : 0;
+                            }
+                        }
+                        $stmtSeed->close();
+                    }
+                }
+            }
+        }
+    }
+
     out_proto(201, [
         'success' => true,
-        'data' => ['id' => $newId, 'empresa_id' => $empresaId, 'descripcion' => $descripcion, 'estado' => 'activo'],
+        'data' => [
+            'id' => $newId,
+            'empresa_id' => $empresaId,
+            'descripcion' => $descripcion,
+            'estado' => 'activo',
+            'sembrar_montos_base' => $sembrarMontosBase,
+            'montos_base_sembrados' => $montosBaseSembrados,
+        ],
     ]);
 }
 
@@ -496,20 +580,191 @@ if ($accion === 'inactivar_protocolo') {
     out_proto(200, ['success' => true, 'message' => 'Protocolo inactivado']);
 }
 
+if ($accion === 'copiar_configuracion_protocolo') {
+    $empresaId = (int)($payload['empresa_id'] ?? 0);
+    $protocoloOrigenId = (int)($payload['protocolo_origen_id'] ?? 0);
+    $protocoloDestinoId = (int)($payload['protocolo_destino_id'] ?? 0);
+    $copiarMontos = parse_bool_proto($payload['copiar_montos'] ?? true);
+    $copiarCondiciones = parse_bool_proto($payload['copiar_condiciones'] ?? true);
+    $soloPrevisualizar = parse_bool_proto($payload['solo_previsualizar'] ?? false);
+
+    if ($empresaId <= 0 || $protocoloOrigenId <= 0 || $protocoloDestinoId <= 0) {
+        out_proto(422, ['success' => false, 'error' => 'empresa_id, protocolo_origen_id y protocolo_destino_id son obligatorios']);
+    }
+    if ($protocoloOrigenId === $protocoloDestinoId) {
+        out_proto(422, ['success' => false, 'error' => 'El protocolo origen debe ser distinto al destino']);
+    }
+    if (!$copiarMontos && !$copiarCondiciones) {
+        out_proto(422, ['success' => false, 'error' => 'Debe copiar al menos montos o condiciones']);
+    }
+
+    $stmtProt = $mysqliOcup->prepare('SELECT id, descripcion FROM ocupacional_protocolos_empresa WHERE empresa_id = ? AND id IN (?, ?)');
+    if (!$stmtProt) {
+        out_proto(500, ['success' => false, 'error' => 'No se pudo validar protocolos']);
+    }
+    $stmtProt->bind_param('iii', $empresaId, $protocoloOrigenId, $protocoloDestinoId);
+    $stmtProt->execute();
+    $resProt = $stmtProt->get_result();
+    $protocolosMap = [];
+    while ($row = $resProt->fetch_assoc()) {
+        $protocolosMap[(int)$row['id']] = [
+            'id' => (int)$row['id'],
+            'descripcion' => (string)$row['descripcion'],
+        ];
+    }
+    $stmtProt->close();
+
+    if (!isset($protocolosMap[$protocoloOrigenId]) || !isset($protocolosMap[$protocoloDestinoId])) {
+        out_proto(422, ['success' => false, 'error' => 'Origen o destino no corresponden a la empresa seleccionada']);
+    }
+
+    $resumen = [
+        'modo' => 'legacy_aditivo',
+        'montos_en_origen' => 0,
+        'montos_procesados' => 0,
+        'condiciones_en_origen' => 0,
+        'condiciones_insertadas' => 0,
+        'condiciones_omitidas_duplicado' => 0,
+    ];
+
+    if ($copiarMontos) {
+        $stmtMontos = $mysqliOcup->prepare('SELECT catalogo_id, tipo_evaluacion_id, monto FROM ocupacional_protocolo_detalle WHERE protocolo_id = ?');
+        if (!$stmtMontos) {
+            out_proto(500, ['success' => false, 'error' => 'No se pudo consultar montos del protocolo origen']);
+        }
+        $stmtMontos->bind_param('i', $protocoloOrigenId);
+        $stmtMontos->execute();
+        $resMontos = $stmtMontos->get_result();
+        $montosRows = [];
+        while ($row = $resMontos->fetch_assoc()) {
+            $montosRows[] = $row;
+        }
+        $stmtMontos->close();
+
+        $resumen['montos_en_origen'] = count($montosRows);
+
+        if (!$soloPrevisualizar && !empty($montosRows)) {
+            $stmtUpMonto = $mysqliOcup->prepare('INSERT INTO ocupacional_protocolo_detalle (protocolo_id, catalogo_id, tipo_evaluacion_id, monto, created_by, updated_by)
+                                                 VALUES (?, ?, ?, ?, ?, ?)
+                                                 ON DUPLICATE KEY UPDATE monto = VALUES(monto), updated_by = VALUES(updated_by), updated_at = NOW()');
+            if (!$stmtUpMonto) {
+                out_proto(500, ['success' => false, 'error' => 'No se pudo preparar copia de montos']);
+            }
+            foreach ($montosRows as $row) {
+                $catalogoId = (int)$row['catalogo_id'];
+                $tipoEvaluacionId = (int)$row['tipo_evaluacion_id'];
+                $monto = (float)$row['monto'];
+                $stmtUpMonto->bind_param('iiidii', $protocoloDestinoId, $catalogoId, $tipoEvaluacionId, $monto, $usuarioId, $usuarioId);
+                $stmtUpMonto->execute();
+                $resumen['montos_procesados']++;
+            }
+            $stmtUpMonto->close();
+        } else {
+            $resumen['montos_procesados'] = $resumen['montos_en_origen'];
+        }
+    }
+
+    if ($copiarCondiciones) {
+        $stmtCond = $mysqliOcup->prepare('SELECT catalogo_id, puesto_trabajo, sexo, edad_min, edad_max FROM ocupacional_protocolo_condiciones WHERE protocolo_id = ? ORDER BY id ASC');
+        if (!$stmtCond) {
+            out_proto(500, ['success' => false, 'error' => 'No se pudo consultar condiciones del protocolo origen']);
+        }
+        $stmtCond->bind_param('i', $protocoloOrigenId);
+        $stmtCond->execute();
+        $resCond = $stmtCond->get_result();
+        $condRows = [];
+        while ($row = $resCond->fetch_assoc()) {
+            $condRows[] = $row;
+        }
+        $stmtCond->close();
+
+        $resumen['condiciones_en_origen'] = count($condRows);
+
+        $stmtDupCond = $mysqliOcup->prepare('SELECT id
+                                             FROM ocupacional_protocolo_condiciones
+                                             WHERE protocolo_id = ?
+                                               AND catalogo_id = ?
+                                               AND COALESCE(puesto_trabajo, "") = ?
+                                               AND COALESCE(sexo, "") = ?
+                                               AND IFNULL(edad_min, -1) = ?
+                                               AND IFNULL(edad_max, -1) = ?
+                                             LIMIT 1');
+        if (!$stmtDupCond) {
+            out_proto(500, ['success' => false, 'error' => 'No se pudo validar duplicados de condiciones']);
+        }
+
+        $stmtInsCond = null;
+        if (!$soloPrevisualizar) {
+            $stmtInsCond = $mysqliOcup->prepare('INSERT INTO ocupacional_protocolo_condiciones
+                                                 (protocolo_id, catalogo_id, puesto_trabajo, sexo, edad_min, edad_max, created_by, updated_by)
+                                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+            if (!$stmtInsCond) {
+                $stmtDupCond->close();
+                out_proto(500, ['success' => false, 'error' => 'No se pudo preparar copia de condiciones']);
+            }
+        }
+
+        foreach ($condRows as $row) {
+            $catalogoId = (int)$row['catalogo_id'];
+            $puestoTrabajo = (string)($row['puesto_trabajo'] ?? '');
+            $sexo = (string)($row['sexo'] ?? '');
+            $edadMin = isset($row['edad_min']) ? (int)$row['edad_min'] : null;
+            $edadMax = isset($row['edad_max']) ? (int)$row['edad_max'] : null;
+            $edadMinCmp = $edadMin === null ? -1 : $edadMin;
+            $edadMaxCmp = $edadMax === null ? -1 : $edadMax;
+
+            $stmtDupCond->bind_param('iissii', $protocoloDestinoId, $catalogoId, $puestoTrabajo, $sexo, $edadMinCmp, $edadMaxCmp);
+            $stmtDupCond->execute();
+            $dup = $stmtDupCond->get_result()->fetch_assoc();
+            if ($dup) {
+                $resumen['condiciones_omitidas_duplicado']++;
+                continue;
+            }
+
+            if (!$soloPrevisualizar && $stmtInsCond) {
+                $puestoSave = $puestoTrabajo === '' ? null : $puestoTrabajo;
+                $sexoSave = $sexo === '' ? null : $sexo;
+                $stmtInsCond->bind_param('iissiiii', $protocoloDestinoId, $catalogoId, $puestoSave, $sexoSave, $edadMin, $edadMax, $usuarioId, $usuarioId);
+                $stmtInsCond->execute();
+            }
+            $resumen['condiciones_insertadas']++;
+        }
+
+        $stmtDupCond->close();
+        if ($stmtInsCond) {
+            $stmtInsCond->close();
+        }
+    }
+
+    out_proto(200, [
+        'success' => true,
+        'message' => $soloPrevisualizar ? 'Previsualizacion completada (sin cambios)' : 'Configuracion copiada correctamente',
+        'data' => [
+            'empresa_id' => $empresaId,
+            'protocolo_origen' => $protocolosMap[$protocoloOrigenId],
+            'protocolo_destino' => $protocolosMap[$protocoloDestinoId],
+            'copiar_montos' => $copiarMontos,
+            'copiar_condiciones' => $copiarCondiciones,
+            'resumen' => $resumen,
+        ],
+    ]);
+}
+
 if ($accion === 'guardar_monto') {
     $protocoloId = (int)($payload['protocolo_id'] ?? 0);
     $catalogoId = (int)($payload['catalogo_id'] ?? 0);
     $tipoEvaluacionId = (int)($payload['tipo_evaluacion_id'] ?? 0);
     $montoRaw = isset($payload['monto']) ? trim((string)$payload['monto']) : '';
+    $restablecerBase = parse_bool_proto($payload['restablecer_base'] ?? false);
 
     if ($protocoloId <= 0 || $catalogoId <= 0 || $tipoEvaluacionId <= 0) {
         out_proto(422, ['success' => false, 'error' => 'protocolo_id, catalogo_id y tipo_evaluacion_id son obligatorios']);
     }
 
-    if ($montoRaw === '') {
+    if ($restablecerBase) {
         $stmtDel = $mysqliOcup->prepare('DELETE FROM ocupacional_protocolo_detalle WHERE protocolo_id = ? AND catalogo_id = ? AND tipo_evaluacion_id = ? LIMIT 1');
         if (!$stmtDel) {
-            out_proto(500, ['success' => false, 'error' => 'No se pudo limpiar monto']);
+            out_proto(500, ['success' => false, 'error' => 'No se pudo restablecer monto base']);
         }
         $stmtDel->bind_param('iii', $protocoloId, $catalogoId, $tipoEvaluacionId);
         $stmtDel->execute();
@@ -522,6 +777,30 @@ if ($accion === 'guardar_monto') {
                 'catalogo_id' => $catalogoId,
                 'tipo_evaluacion_id' => $tipoEvaluacionId,
                 'monto' => '',
+                'origen' => 'examen_general',
+            ],
+        ]);
+    }
+
+    if ($montoRaw === '') {
+        $stmtUpZero = $mysqliOcup->prepare('INSERT INTO ocupacional_protocolo_detalle (protocolo_id, catalogo_id, tipo_evaluacion_id, monto, created_by, updated_by)
+                                            VALUES (?, ?, ?, 0, ?, ?)
+                                            ON DUPLICATE KEY UPDATE monto = 0, updated_by = VALUES(updated_by), updated_at = NOW()');
+        if (!$stmtUpZero) {
+            out_proto(500, ['success' => false, 'error' => 'No se pudo excluir examen del protocolo']);
+        }
+        $stmtUpZero->bind_param('iiiii', $protocoloId, $catalogoId, $tipoEvaluacionId, $usuarioId, $usuarioId);
+        $stmtUpZero->execute();
+        $stmtUpZero->close();
+
+        out_proto(200, [
+            'success' => true,
+            'data' => [
+                'protocolo_id' => $protocoloId,
+                'catalogo_id' => $catalogoId,
+                'tipo_evaluacion_id' => $tipoEvaluacionId,
+                'monto' => '',
+                'origen' => 'protocolo_excluido',
             ],
         ]);
     }
@@ -708,6 +987,197 @@ if ($accion === 'guardar_condicion') {
             'sexo' => $sexoSave,
             'edad_min' => $edadMin,
             'edad_max' => $edadMax,
+        ],
+    ]);
+}
+
+if ($accion === 'aplicar_condicion_masiva') {
+    $protocoloId = (int)($payload['protocolo_id'] ?? 0);
+    $empresaId = (int)($payload['empresa_id'] ?? 0);
+    $filtroQ = trim((string)($payload['filtro_q'] ?? ''));
+    $puestoTrabajo = trim((string)($payload['puesto_trabajo'] ?? ''));
+    $sexo = strtoupper(trim((string)($payload['sexo'] ?? '')));
+    $edadMinRaw = trim((string)($payload['edad_min'] ?? ''));
+    $edadMaxRaw = trim((string)($payload['edad_max'] ?? ''));
+    $soloPrevisualizarRaw = $payload['solo_previsualizar'] ?? false;
+    $soloPrevisualizar = false;
+    if (is_bool($soloPrevisualizarRaw)) {
+        $soloPrevisualizar = $soloPrevisualizarRaw;
+    } else {
+        $soloPrevisualizar = in_array(strtolower(trim((string)$soloPrevisualizarRaw)), ['1', 'true', 'si', 'yes'], true);
+    }
+
+    if ($protocoloId <= 0 || $empresaId <= 0) {
+        out_proto(422, ['success' => false, 'error' => 'protocolo_id y empresa_id son obligatorios']);
+    }
+
+    if ($filtroQ === '') {
+        out_proto(422, ['success' => false, 'error' => 'filtro_q es obligatorio para aplicar de forma masiva']);
+    }
+
+    if ($sexo !== '' && $sexo !== 'M' && $sexo !== 'F') {
+        out_proto(422, ['success' => false, 'error' => 'sexo invalido']);
+    }
+
+    $edadMin = null;
+    if ($edadMinRaw !== '') {
+        if (!ctype_digit($edadMinRaw)) {
+            out_proto(422, ['success' => false, 'error' => 'edad_min invalida']);
+        }
+        $edadMin = (int)$edadMinRaw;
+    }
+
+    $edadMax = null;
+    if ($edadMaxRaw !== '') {
+        if (!ctype_digit($edadMaxRaw)) {
+            out_proto(422, ['success' => false, 'error' => 'edad_max invalida']);
+        }
+        $edadMax = (int)$edadMaxRaw;
+    }
+
+    if (($puestoTrabajo === '') && ($sexo === '') && $edadMin === null && $edadMax === null) {
+        out_proto(422, ['success' => false, 'error' => 'Debe ingresar al menos un criterio: puesto, sexo o rango de edad']);
+    }
+
+    if ($edadMin !== null && ($edadMin < 0 || $edadMin > 120)) {
+        out_proto(422, ['success' => false, 'error' => 'edad_min fuera de rango']);
+    }
+    if ($edadMax !== null && ($edadMax < 0 || $edadMax > 120)) {
+        out_proto(422, ['success' => false, 'error' => 'edad_max fuera de rango']);
+    }
+    if ($edadMin !== null && $edadMax !== null && $edadMin > $edadMax) {
+        out_proto(422, ['success' => false, 'error' => 'edad_min no puede ser mayor que edad_max']);
+    }
+
+    $stmtProt = $mysqliOcup->prepare('SELECT id FROM ocupacional_protocolos_empresa WHERE id = ? AND empresa_id = ? LIMIT 1');
+    if (!$stmtProt) {
+        out_proto(500, ['success' => false, 'error' => 'No se pudo validar protocolo']);
+    }
+    $stmtProt->bind_param('ii', $protocoloId, $empresaId);
+    $stmtProt->execute();
+    $prot = $stmtProt->get_result()->fetch_assoc();
+    $stmtProt->close();
+    if (!$prot) {
+        out_proto(422, ['success' => false, 'error' => 'protocolo_id no corresponde a la empresa']);
+    }
+
+    $term = '%' . $filtroQ . '%';
+    $stmtIds = $mysqliOcup->prepare('SELECT c.id AS catalogo_id
+                                     FROM ocupacional_catalogo_empresas c
+                                     INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
+                                     WHERE c.empresa_id = ?
+                                       AND c.estado = "activo"
+                                       AND e.estado = "activo"
+                                       AND (e.codigo LIKE ? OR e.descripcion LIKE ? OR e.grupo LIKE ? OR e.subgrupo LIKE ?)
+                                     ORDER BY e.grupo ASC, e.subgrupo ASC, e.descripcion ASC, e.id DESC');
+    if (!$stmtIds) {
+        out_proto(500, ['success' => false, 'error' => 'No se pudo buscar examenes para aplicar condicion']);
+    }
+    $stmtIds->bind_param('issss', $empresaId, $term, $term, $term, $term);
+    $stmtIds->execute();
+    $resIds = $stmtIds->get_result();
+    $catalogoIds = [];
+    while ($row = $resIds->fetch_assoc()) {
+        $catalogoIds[] = (int)$row['catalogo_id'];
+    }
+    $stmtIds->close();
+
+    if (empty($catalogoIds)) {
+        out_proto(422, ['success' => false, 'error' => 'No hay examenes activos que coincidan con el filtro']);
+    }
+
+    if ($soloPrevisualizar) {
+        out_proto(200, [
+            'success' => true,
+            'message' => 'Previsualizacion completada (sin cambios)',
+            'data' => [
+                'protocolo_id' => $protocoloId,
+                'empresa_id' => $empresaId,
+                'filtro_q' => $filtroQ,
+                'criterio' => [
+                    'puesto_trabajo' => $puestoTrabajo === '' ? null : $puestoTrabajo,
+                    'sexo' => $sexo === '' ? null : $sexo,
+                    'edad_min' => $edadMin,
+                    'edad_max' => $edadMax,
+                ],
+                'resumen' => [
+                    'catalogos_coincidentes' => count($catalogoIds),
+                    'modo' => 'legacy_aditivo',
+                ],
+            ],
+        ]);
+    }
+
+    $puestoSave = $puestoTrabajo === '' ? null : $puestoTrabajo;
+    $sexoSave = $sexo === '' ? null : $sexo;
+    $edadMinCmp = $edadMin === null ? -1 : $edadMin;
+    $edadMaxCmp = $edadMax === null ? -1 : $edadMax;
+
+    $stmtDup = $mysqliOcup->prepare('SELECT id
+                                     FROM ocupacional_protocolo_condiciones
+                                     WHERE protocolo_id = ?
+                                       AND catalogo_id = ?
+                                       AND COALESCE(puesto_trabajo, "") = ?
+                                       AND COALESCE(sexo, "") = ?
+                                       AND IFNULL(edad_min, -1) = ?
+                                       AND IFNULL(edad_max, -1) = ?
+                                     LIMIT 1');
+    if (!$stmtDup) {
+        out_proto(500, ['success' => false, 'error' => 'No se pudo preparar validacion de duplicidad']);
+    }
+
+    $stmtIns = $mysqliOcup->prepare('INSERT INTO ocupacional_protocolo_condiciones
+                                     (protocolo_id, catalogo_id, puesto_trabajo, sexo, edad_min, edad_max, created_by, updated_by)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    if (!$stmtIns) {
+        $stmtDup->close();
+        out_proto(500, ['success' => false, 'error' => 'No se pudo preparar insercion masiva']);
+    }
+
+    $considerados = 0;
+    $insertados = 0;
+    $omitidos = 0;
+
+    foreach ($catalogoIds as $catalogoId) {
+        $considerados++;
+
+        $puestoCmp = $puestoTrabajo;
+        $sexoCmp = $sexo;
+        $stmtDup->bind_param('iissii', $protocoloId, $catalogoId, $puestoCmp, $sexoCmp, $edadMinCmp, $edadMaxCmp);
+        $stmtDup->execute();
+        $dup = $stmtDup->get_result()->fetch_assoc();
+        if ($dup) {
+            $omitidos++;
+            continue;
+        }
+
+        $stmtIns->bind_param('iissiiii', $protocoloId, $catalogoId, $puestoSave, $sexoSave, $edadMin, $edadMax, $usuarioId, $usuarioId);
+        $stmtIns->execute();
+        $insertados += ((int)$stmtIns->affected_rows > 0) ? 1 : 0;
+    }
+
+    $stmtDup->close();
+    $stmtIns->close();
+
+    out_proto(200, [
+        'success' => true,
+        'message' => 'Aplicacion masiva completada',
+        'data' => [
+            'protocolo_id' => $protocoloId,
+            'empresa_id' => $empresaId,
+            'filtro_q' => $filtroQ,
+            'criterio' => [
+                'puesto_trabajo' => $puestoSave,
+                'sexo' => $sexoSave,
+                'edad_min' => $edadMin,
+                'edad_max' => $edadMax,
+            ],
+            'resumen' => [
+                'catalogos_considerados' => $considerados,
+                'insertados' => $insertados,
+                'omitidos_duplicado' => $omitidos,
+                'modo' => 'legacy_aditivo',
+            ],
         ],
     ]);
 }

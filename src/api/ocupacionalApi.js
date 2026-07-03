@@ -243,6 +243,13 @@ export async function listarTiposEvaluacionOcupacional() {
   return payload.data || [];
 }
 
+export async function listarPlantillasCondicionesOcupacionales() {
+  const params = new URLSearchParams({ accion: "listar_plantillas_condiciones" });
+  const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
 export async function listarProtocolosOcupacionales({ empresaId, estado = "activo" } = {}) {
   const params = new URLSearchParams({
     accion: "listar_protocolos",
@@ -254,7 +261,7 @@ export async function listarProtocolosOcupacionales({ empresaId, estado = "activ
   return payload.data || [];
 }
 
-export async function guardarProtocoloOcupacional({ id, empresaId, descripcion }) {
+export async function guardarProtocoloOcupacional({ id, empresaId, descripcion, sembrarMontosBase = true }) {
   const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
     method: "POST",
     headers: jsonHeaders,
@@ -263,6 +270,7 @@ export async function guardarProtocoloOcupacional({ id, empresaId, descripcion }
       ...(id ? { id: Number(id) } : {}),
       empresa_id: Number(empresaId),
       descripcion: String(descripcion || "").trim(),
+      sembrar_montos_base: Boolean(sembrarMontosBase),
     }),
   });
   const payload = await parseJsonOrThrow(response);
@@ -277,6 +285,31 @@ export async function inactivarProtocoloOcupacional(id) {
   });
   const payload = await parseJsonOrThrow(response);
   return payload;
+}
+
+export async function copiarConfiguracionProtocoloOcupacional({
+  empresaId,
+  protocoloOrigenId,
+  protocoloDestinoId,
+  copiarMontos = true,
+  copiarCondiciones = true,
+  soloPrevisualizar = false,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "copiar_configuracion_protocolo",
+      empresa_id: Number(empresaId),
+      protocolo_origen_id: Number(protocoloOrigenId),
+      protocolo_destino_id: Number(protocoloDestinoId),
+      copiar_montos: Boolean(copiarMontos),
+      copiar_condiciones: Boolean(copiarCondiciones),
+      solo_previsualizar: Boolean(soloPrevisualizar),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
 }
 
 export async function listarMatrizProtocoloOcupacional({
@@ -309,6 +342,7 @@ export async function guardarMontoProtocoloOcupacional({
   catalogoId,
   tipoEvaluacionId,
   monto,
+  restablecerBase = false,
 } = {}) {
   const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
     method: "POST",
@@ -319,6 +353,7 @@ export async function guardarMontoProtocoloOcupacional({
       catalogo_id: Number(catalogoId),
       tipo_evaluacion_id: Number(tipoEvaluacionId),
       monto,
+      restablecer_base: Boolean(restablecerBase),
     }),
   });
   const payload = await parseJsonOrThrow(response);
@@ -383,6 +418,35 @@ export async function eliminarCondicionProtocoloOcupacional(id) {
   return payload;
 }
 
+export async function aplicarCondicionMasivaProtocoloOcupacional({
+  protocoloId,
+  empresaId,
+  filtroQ,
+  puestoTrabajo,
+  sexo,
+  edadMin,
+  edadMax,
+  soloPrevisualizar = false,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "aplicar_condicion_masiva",
+      protocolo_id: Number(protocoloId),
+      empresa_id: Number(empresaId),
+      filtro_q: String(filtroQ || "").trim(),
+      puesto_trabajo: puestoTrabajo || "",
+      sexo: sexo || "",
+      edad_min: edadMin ?? "",
+      edad_max: edadMax ?? "",
+      solo_previsualizar: Boolean(soloPrevisualizar),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
 export async function previsualizarOrdenOcupacional({
   empresaId,
   trabajadorId,
@@ -424,6 +488,180 @@ export async function registrarOrdenOcupacional({
   });
   const payload = await parseJsonOrThrow(response);
   return payload.data;
+}
+
+export async function listarHistoriaOcupacionalPorOrden(ordenId) {
+  const params = new URLSearchParams({
+    accion: "listar",
+    orden_id: String(ordenId || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_historia.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return {
+    orden: payload.orden || null,
+    data: payload.data || [],
+  };
+}
+
+export async function obtenerHistoriaOcupacional(id) {
+  const params = new URLSearchParams({
+    accion: "obtener",
+    id: String(id || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_historia.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return {
+    orden: payload.orden || null,
+    data: payload.data || null,
+  };
+}
+
+export async function guardarHistoriaOcupacional(data = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_historia.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar",
+      ...data,
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return {
+    orden: payload.orden || null,
+    data: payload.data || null,
+    message: payload.message || "",
+  };
+}
+
+export async function anularHistoriaOcupacional({ id, motivo = "" } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_historia.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "anular",
+      id: Number(id),
+      motivo: String(motivo || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload;
+}
+
+export async function obtenerHistoriaClinicaOcupacionalConsolidada(ordenId) {
+  const params = new URLSearchParams({
+    accion: "consolidado",
+    orden_id: String(ordenId || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_clinica.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
+}
+
+export async function obtenerResultadoClinicoOcupacional({ ordenDetalleId, formatoCodigo = "" } = {}) {
+  const params = new URLSearchParams({
+    accion: "obtener",
+    orden_detalle_id: String(Number(ordenDetalleId) || 0),
+  });
+  if (String(formatoCodigo || "").trim() !== "") {
+    params.set("formato_codigo", String(formatoCodigo).trim());
+  }
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return {
+    detalle: payload.detalle || null,
+    data: payload.data || null,
+    plantillaSugerida: payload.plantilla_sugerida || null,
+    plantillasDisponibles: payload.plantillas_disponibles || [],
+  };
+}
+
+export async function listarPlantillasResultadoClinicoOcupacional({
+  examenCodigo = "",
+  examenDescripcion = "",
+  formatoCodigo = "",
+} = {}) {
+  const params = new URLSearchParams({ accion: "listar_plantillas" });
+  if (String(examenCodigo || "").trim() !== "") {
+    params.set("examen_codigo", String(examenCodigo).trim());
+  }
+  if (String(examenDescripcion || "").trim() !== "") {
+    params.set("examen_descripcion", String(examenDescripcion).trim());
+  }
+  if (String(formatoCodigo || "").trim() !== "") {
+    params.set("formato_codigo", String(formatoCodigo).trim());
+  }
+
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
+}
+
+export async function guardarPlantillaResultadoClinicoOcupacional({
+  id = 0,
+  ordenDetalleId = 0,
+  nombre,
+  codigo = "",
+  templateCode = "",
+  examenCodigo = "",
+  examenDescripcion = "",
+  formatoCodigo = "",
+  datosJson,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar_plantilla",
+      id: Number(id) || 0,
+      orden_detalle_id: Number(ordenDetalleId) || 0,
+      nombre: String(nombre || "").trim(),
+      codigo: String(codigo || "").trim(),
+      template_code: String(templateCode || "").trim(),
+      examen_codigo: String(examenCodigo || "").trim(),
+      examen_descripcion: String(examenDescripcion || "").trim(),
+      formato_codigo: String(formatoCodigo || "").trim(),
+      datos_json: datosJson,
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
+}
+
+export async function eliminarPlantillaResultadoClinicoOcupacional(id, { ordenDetalleId = 0 } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "eliminar_plantilla",
+      id: Number(id) || 0,
+      orden_detalle_id: Number(ordenDetalleId) || 0,
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload;
+}
+
+export async function guardarResultadoClinicoOcupacional({
+  ordenDetalleId,
+  formatoCodigo,
+  datosJson,
+  estado = "borrador",
+  observacion = "",
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar",
+      orden_detalle_id: Number(ordenDetalleId),
+      formato_codigo: String(formatoCodigo || "").trim(),
+      datos_json: datosJson,
+      estado: String(estado || "borrador").trim(),
+      observacion: String(observacion || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
 }
 
 export async function listarOrdenesOcupacionalesPaginado({
@@ -512,6 +750,23 @@ export async function guardarAptitudOrdenOcupacional({
       restriccion_final: String(restriccionFinal || "").trim(),
       recomendacion_final: String(recomendacionFinal || "").trim(),
       medico_responsable: String(medicoResponsable || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function registrarEmisionCertificadoOrdenOcupacional({
+  id,
+  formato = "pdf",
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "registrar_emision_certificado_orden",
+      id: Number(id),
+      formato: String(formato || "pdf").trim() || "pdf",
     }),
   });
   const payload = await parseJsonOrThrow(response);

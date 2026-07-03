@@ -48,6 +48,10 @@ session_debug.php
 !/sql/2026-06-16_ocupacional_fase3_ejecucion_ordenes.sql
 !/sql/2026-06-16_ocupacional_fase3_cierre_auditoria.sql
 !/sql/2026-06-16_ocupacional_fase3_aptitud_certificado.sql
+!/sql/salud-ocupacional/
+!/sql/salud-ocupacional/fase4_historia_clinica/
+!/sql/salud-ocupacional/fase4_historia_clinica/*.sql
+!/sql/salud-ocupacional/fase4_historia_clinica/README.md
 backup/
 uploads/
 # Permitir versionar carpetas vacías necesarias para hosting

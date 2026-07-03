@@ -4,6 +4,14 @@ import {
   listarProtocolosOcupacionales,
   listarTiposEvaluacionOcupacional,
   listarTrabajadoresOcupacionalesPaginado,
+  listarHistoriaOcupacionalPorOrden,
+  guardarHistoriaOcupacional,
+  anularHistoriaOcupacional,
+  obtenerHistoriaClinicaOcupacionalConsolidada,
+  obtenerResultadoClinicoOcupacional,
+  guardarResultadoClinicoOcupacional,
+  guardarPlantillaResultadoClinicoOcupacional,
+  eliminarPlantillaResultadoClinicoOcupacional,
   actualizarDetalleOrdenOcupacional,
   listarEventosOrdenOcupacional,
   obtenerDetalleOrdenOcupacional,
@@ -14,6 +22,7 @@ import {
   anularOrdenOcupacional,
   cerrarOrdenOcupacional,
   guardarAptitudOrdenOcupacional,
+  registrarEmisionCertificadoOrdenOcupacional,
   registrarOrdenOcupacional,
 } from "../../api/ocupacionalApi";
 
@@ -23,6 +32,19 @@ function todayIso() {
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function prettyJsonInput(value) {
+  if (value == null) return "[]";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? "[]" : trimmed;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "[]";
+  }
 }
 
 export default function OrdenesOcupacionalesPage() {
@@ -76,6 +98,42 @@ export default function OrdenesOcupacionalesPage() {
   const [aptitudForm, setAptitudForm] = useState({ aptitud: "", restriccion: "", recomendacion: "", medico: "" });
   const [savingAptitud, setSavingAptitud] = useState(false);
   const [certificandoId, setCertificandoId] = useState(0);
+  const [historiaRows, setHistoriaRows] = useState([]);
+  const [historiaLoading, setHistoriaLoading] = useState(false);
+  const [historiaSaving, setHistoriaSaving] = useState(false);
+  const [historiaAnulandoId, setHistoriaAnulandoId] = useState(0);
+  const [historiaError, setHistoriaError] = useState("");
+  const [historiaEditingId, setHistoriaEditingId] = useState(0);
+  const [historiaForm, setHistoriaForm] = useState({
+    motivo_evaluacion: "",
+    puesto_actual: "",
+    area_trabajo: "",
+    tiempo_puesto_meses: "",
+    observaciones: "",
+    antecedentes_laborales_json: "[]",
+    antecedentes_patologicos_json: "[]",
+    habitos_json: "[]",
+  });
+  const [clinicaConsolidada, setClinicaConsolidada] = useState(null);
+  const [clinicaLoading, setClinicaLoading] = useState(false);
+  const [clinicaError, setClinicaError] = useState("");
+  const [formatoModalOpen, setFormatoModalOpen] = useState(false);
+  const [formatoModalLoading, setFormatoModalLoading] = useState(false);
+  const [formatoModalSaving, setFormatoModalSaving] = useState(false);
+  const [formatoModalError, setFormatoModalError] = useState("");
+  const [formatoModalData, setFormatoModalData] = useState(null);
+  const [formatoPlantillaSeleccionada, setFormatoPlantillaSeleccionada] = useState("0");
+  const [formatoPlantillaNombre, setFormatoPlantillaNombre] = useState("");
+  const [formatoPlantillaSaving, setFormatoPlantillaSaving] = useState(false);
+  const [formatoForm, setFormatoForm] = useState({
+    ordenDetalleId: 0,
+    examenCodigo: "",
+    examenDescripcion: "",
+    formatoCodigo: "",
+    estado: "borrador",
+    observacion: "",
+    datosJsonText: "{}",
+  });
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -299,6 +357,40 @@ export default function OrdenesOcupacionalesPage() {
         recomendacion: det.recomendacion_final || "",
         medico: det.medico_responsable || "",
       });
+      setHistoriaEditingId(0);
+      setHistoriaError("");
+      setHistoriaForm({
+        motivo_evaluacion: "",
+        puesto_actual: det.puesto_trabajo || "",
+        area_trabajo: "",
+        tiempo_puesto_meses: "",
+        observaciones: "",
+        antecedentes_laborales_json: "[]",
+        antecedentes_patologicos_json: "[]",
+        habitos_json: "[]",
+      });
+      setHistoriaLoading(true);
+      try {
+        const historia = await listarHistoriaOcupacionalPorOrden(ordenId);
+        setHistoriaRows(historia.data || []);
+      } catch (histErr) {
+        setHistoriaError(histErr.message || "No se pudo cargar historia ocupacional");
+        setHistoriaRows([]);
+      } finally {
+        setHistoriaLoading(false);
+      }
+
+      setClinicaLoading(true);
+      setClinicaError("");
+      try {
+        const consolidada = await obtenerHistoriaClinicaOcupacionalConsolidada(ordenId);
+        setClinicaConsolidada(consolidada);
+      } catch (clinErr) {
+        setClinicaConsolidada(null);
+        setClinicaError(clinErr.message || "No se pudo cargar historia clinica consolidada");
+      } finally {
+        setClinicaLoading(false);
+      }
     } catch (err) {
       const msg = err.message || "No se pudo obtener detalle de la orden";
       setDetalleModalError(msg);
@@ -326,6 +418,389 @@ export default function OrdenesOcupacionalesPage() {
       recomendacion: det.recomendacion_final || "",
       medico: det.medico_responsable || "",
     });
+    try {
+      const historia = await listarHistoriaOcupacionalPorOrden(ordenId);
+      setHistoriaRows(historia.data || []);
+    } catch {
+      setHistoriaRows([]);
+    }
+
+    try {
+      const consolidada = await obtenerHistoriaClinicaOcupacionalConsolidada(ordenId);
+      setClinicaConsolidada(consolidada);
+      setClinicaError("");
+    } catch (clinErr) {
+      setClinicaConsolidada(null);
+      setClinicaError(clinErr.message || "No se pudo cargar historia clinica consolidada");
+    }
+  };
+
+  const onRecargarClinicaConsolidada = async () => {
+    if (!detalleModalData?.id) return;
+    setClinicaLoading(true);
+    setClinicaError("");
+    try {
+      const consolidada = await obtenerHistoriaClinicaOcupacionalConsolidada(detalleModalData.id);
+      setClinicaConsolidada(consolidada);
+    } catch (err) {
+      setClinicaConsolidada(null);
+      setClinicaError(err.message || "No se pudo recargar historia clinica consolidada");
+    } finally {
+      setClinicaLoading(false);
+    }
+  };
+
+  const onAbrirFormatoClinico = async (item) => {
+    if (!item?.id) return;
+    setFormatoModalOpen(true);
+    setFormatoModalLoading(true);
+    setFormatoModalSaving(false);
+    setFormatoModalError("");
+    setFormatoModalData(null);
+    setFormatoPlantillaSeleccionada("0");
+    setFormatoPlantillaNombre("");
+    setFormatoPlantillaSaving(false);
+    setFormatoForm({
+      ordenDetalleId: Number(item.id),
+      examenCodigo: String(item.examen_codigo || ""),
+      examenDescripcion: String(item.examen_descripcion || ""),
+      formatoCodigo: String(item.examen_codigo || "formato_general").toLowerCase(),
+      estado: "borrador",
+      observacion: String(item.observacion_ejecucion || ""),
+      datosJsonText: "{}",
+    });
+
+    try {
+      const result = await obtenerResultadoClinicoOcupacional({
+        ordenDetalleId: item.id,
+        formatoCodigo: String(item.examen_codigo || "").toLowerCase(),
+      });
+      setFormatoModalData(result);
+      const primerasPlantillas = Array.isArray(result?.plantillasDisponibles) ? result.plantillasDisponibles : [];
+      const plantillaInicial = primerasPlantillas.length > 0 ? String(primerasPlantillas[0].id || 0) : "0";
+      setFormatoPlantillaSeleccionada(plantillaInicial);
+      setFormatoPlantillaNombre(`${String(item.examen_codigo || "examen").toLowerCase()}_plantilla`);
+
+      const detalle = result?.detalle || {};
+      const data = result?.data || null;
+      const plantillaSugerida = result?.plantillaSugerida || {};
+      const hasDataGuardada = !!(data && data.id);
+      const datosJsonInicial = hasDataGuardada
+        ? (data?.datos_json ?? {})
+        : ((plantillaSugerida && Object.keys(plantillaSugerida).length > 0) ? plantillaSugerida : {});
+      const datosJsonText = prettyJsonInput(datosJsonInicial);
+      setFormatoForm({
+        ordenDetalleId: Number(detalle.id || item.id),
+        examenCodigo: String(detalle.examen_codigo || item.examen_codigo || ""),
+        examenDescripcion: String(detalle.examen_descripcion || item.examen_descripcion || ""),
+        formatoCodigo: String(data?.formato_codigo || detalle.formato_codigo || item.examen_codigo || "formato_general").toLowerCase(),
+        estado: String(data?.estado || "borrador"),
+        observacion: String(data?.observacion || item.observacion_ejecucion || ""),
+        datosJsonText,
+      });
+    } catch (err) {
+      setFormatoModalError(err.message || "No se pudo abrir formato clinico");
+    } finally {
+      setFormatoModalLoading(false);
+    }
+  };
+
+  const onCargarPlantillaSugeridaFormato = () => {
+    const plantilla = formatoModalData?.plantillaSugerida;
+    if (!plantilla || typeof plantilla !== "object") {
+      setFormatoModalError("No hay plantilla sugerida para este examen");
+      return;
+    }
+    setFormatoForm((prev) => ({ ...prev, datosJsonText: prettyJsonInput(plantilla) }));
+    setFormatoModalError("");
+  };
+
+  const onAplicarPlantillaSeleccionada = () => {
+    const list = Array.isArray(formatoModalData?.plantillasDisponibles) ? formatoModalData.plantillasDisponibles : [];
+    const selected = list.find((tpl) => String(tpl.id || 0) === String(formatoPlantillaSeleccionada || "0"));
+    if (!selected || typeof selected.datos_json !== "object") {
+      setFormatoModalError("Seleccione una plantilla valida");
+      return;
+    }
+    setFormatoForm((prev) => ({ ...prev, datosJsonText: prettyJsonInput(selected.datos_json) }));
+    setFormatoModalError("");
+  };
+
+  const onGuardarPlantillaCatalogo = async () => {
+    let parsedDatos = {};
+    try {
+      parsedDatos = JSON.parse(String(formatoForm.datosJsonText || "{}").trim() || "{}");
+      if (parsedDatos === null || typeof parsedDatos !== "object" || Array.isArray(parsedDatos)) {
+        throw new Error("El JSON del formato debe ser un objeto para guardarlo como plantilla");
+      }
+    } catch (err) {
+      setFormatoModalError(err.message || "JSON invalido para plantilla");
+      return;
+    }
+
+    const nombre = String(formatoPlantillaNombre || "").trim();
+    if (!nombre) {
+      setFormatoModalError("Ingrese un nombre de plantilla");
+      return;
+    }
+
+    setFormatoPlantillaSaving(true);
+    setFormatoModalError("");
+    try {
+      const saved = await guardarPlantillaResultadoClinicoOcupacional({
+        ordenDetalleId: Number(formatoForm.ordenDetalleId || 0),
+        nombre: String(nombre).trim(),
+        templateCode: formatoModalData?.detalle?.template_code || "",
+        examenCodigo: formatoForm.examenCodigo || "",
+        examenDescripcion: formatoForm.examenDescripcion || "",
+        formatoCodigo: formatoForm.formatoCodigo || "",
+        datosJson: parsedDatos,
+      });
+
+      const existentes = Array.isArray(formatoModalData?.plantillasDisponibles)
+        ? formatoModalData.plantillasDisponibles.filter((tpl) => Number(tpl.id || 0) !== Number(saved?.id || 0))
+        : [];
+      const actualizadas = [saved, ...existentes];
+      setFormatoModalData((prev) => ({
+        ...(prev || {}),
+        plantillasDisponibles: actualizadas,
+        plantillaSugerida: saved?.datos_json || prev?.plantillaSugerida || {},
+      }));
+      setFormatoPlantillaSeleccionada(String(saved?.id || 0));
+      if (detalleModalData?.id) {
+        await recargarDetalleModal(detalleModalData.id);
+      }
+      setMessage("Plantilla guardada en catalogo");
+    } catch (err) {
+      setFormatoModalError(err.message || "No se pudo guardar plantilla");
+    } finally {
+      setFormatoPlantillaSaving(false);
+    }
+  };
+
+  const onEliminarPlantillaCatalogo = async () => {
+    const list = Array.isArray(formatoModalData?.plantillasDisponibles) ? formatoModalData.plantillasDisponibles : [];
+    const selected = list.find((tpl) => String(tpl.id || 0) === String(formatoPlantillaSeleccionada || "0"));
+    if (!selected || Number(selected.id || 0) <= 0) {
+      setFormatoModalError("Solo puede eliminar plantillas del catalogo");
+      return;
+    }
+
+    const ok = window.confirm(`Eliminar plantilla "${selected.nombre || selected.codigo || selected.id}"?`);
+    if (!ok) return;
+
+    setFormatoPlantillaSaving(true);
+    setFormatoModalError("");
+    try {
+      await eliminarPlantillaResultadoClinicoOcupacional(selected.id, {
+        ordenDetalleId: Number(formatoForm.ordenDetalleId || 0),
+      });
+      const restantes = list.filter((tpl) => Number(tpl.id || 0) !== Number(selected.id || 0));
+      setFormatoModalData((prev) => ({ ...(prev || {}), plantillasDisponibles: restantes }));
+      setFormatoPlantillaSeleccionada(restantes.length > 0 ? String(restantes[0].id || 0) : "0");
+      if (detalleModalData?.id) {
+        await recargarDetalleModal(detalleModalData.id);
+      }
+      setMessage("Plantilla eliminada del catalogo");
+    } catch (err) {
+      setFormatoModalError(err.message || "No se pudo eliminar plantilla");
+    } finally {
+      setFormatoPlantillaSaving(false);
+    }
+  };
+
+  const onGuardarFormatoClinico = async () => {
+    if (!formatoForm.ordenDetalleId) {
+      setFormatoModalError("No hay detalle seleccionado");
+      return;
+    }
+
+    let parsedDatos = {};
+    try {
+      parsedDatos = JSON.parse(String(formatoForm.datosJsonText || "{}").trim() || "{}");
+      if (parsedDatos === null || typeof parsedDatos !== "object" || Array.isArray(parsedDatos)) {
+        throw new Error("datos_json debe ser un objeto JSON");
+      }
+    } catch (err) {
+      setFormatoModalError(err.message || "JSON invalido en datos clinicos");
+      return;
+    }
+
+    setFormatoModalSaving(true);
+    setFormatoModalError("");
+    try {
+      await guardarResultadoClinicoOcupacional({
+        ordenDetalleId: formatoForm.ordenDetalleId,
+        formatoCodigo: formatoForm.formatoCodigo,
+        datosJson: parsedDatos,
+        estado: formatoForm.estado,
+        observacion: formatoForm.observacion,
+      });
+
+      if (detalleModalData?.id) {
+        await recargarDetalleModal(detalleModalData.id);
+      }
+      setMessage(`Formato clinico guardado (${formatoForm.examenCodigo || formatoForm.formatoCodigo})`);
+      setFormatoModalOpen(false);
+    } catch (err) {
+      setFormatoModalError(err.message || "No se pudo guardar formato clinico");
+    } finally {
+      setFormatoModalSaving(false);
+    }
+  };
+
+  const exportHistoriaClinicaPdf = async () => {
+    if (!detalleModalData?.id) return;
+
+    let data = clinicaConsolidada;
+    if (!data) {
+      data = await obtenerHistoriaClinicaOcupacionalConsolidada(detalleModalData.id);
+      setClinicaConsolidada(data);
+    }
+
+    const cab = data?.cabecera || {};
+    const resumenClin = data?.resumen || {};
+    const detallesClin = data?.detalles || [];
+    const historiasClin = data?.historias || [];
+
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    const doc = new jsPDF();
+
+    doc.setFontSize(14);
+    doc.text("HISTORIA CLINICA OCUPACIONAL CONSOLIDADA", 105, 14, { align: "center" });
+    doc.setFontSize(10);
+    doc.text(`Orden: ${cab.codigo || ""} | Fecha: ${cab.fecha_orden || ""} | Estado: ${cab.estado || ""}`, 14, 22);
+    doc.text(`Empresa: ${cab.empresa || ""}`, 14, 28);
+    doc.text(`Documento: ${cab.documento_numero || ""} | Puesto: ${cab.puesto_trabajo || ""}`, 14, 34);
+    doc.text(`Protocolo: ${cab.protocolo_descripcion || ""} | Tipo: ${cab.tipo_codigo || ""} - ${cab.tipo_nombre || ""}`, 14, 40);
+
+    autoTable(doc, {
+      startY: 46,
+      head: [["Resumen clinico", "Valor"]],
+      body: [
+        ["Total examenes", String(resumenClin.total_items || 0)],
+        ["Completados", String(resumenClin.total_completados || 0)],
+        ["Observados", String(resumenClin.total_observados || 0)],
+        ["Pendientes", String(resumenClin.total_pendientes || 0)],
+        ["Avance", `${resumenClin.porcentaje_avance || 0}%`],
+        ["Historias registradas", String(resumenClin.historias_registradas || 0)],
+      ],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [30, 64, 175] },
+    });
+
+    autoTable(doc, {
+      startY: (doc.lastAutoTable?.finalY || 46) + 6,
+      head: [["#", "Codigo", "Examen", "Estado", "Observacion", "Fecha ejecucion"]],
+      body: detallesClin.map((it, idx) => [
+        String(idx + 1),
+        String(it.examen_codigo || ""),
+        String(it.examen_descripcion || ""),
+        String(it.estado_ejecucion || ""),
+        String(it.observacion_ejecucion || ""),
+        String(it.fecha_ejecucion || ""),
+      ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [2, 132, 199] },
+    });
+
+    const historiasBody = historiasClin.length > 0
+      ? historiasClin.map((h, idx) => [
+        String(idx + 1),
+        String(h.motivo_evaluacion || ""),
+        String(h.puesto_actual || ""),
+        String(h.area_trabajo || ""),
+        String(h.observaciones || ""),
+      ])
+      : [["-", "Sin historia registrada", "", "", ""]];
+
+    autoTable(doc, {
+      startY: (doc.lastAutoTable?.finalY || 46) + 6,
+      head: [["#", "Motivo", "Puesto", "Area", "Observaciones"]],
+      body: historiasBody,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [15, 118, 110] },
+    });
+
+    const yFinal = (doc.lastAutoTable?.finalY || 46) + 8;
+    doc.setFontSize(10);
+    doc.text(`Aptitud final: ${cab.aptitud_final || "No consignada"}`, 14, yFinal);
+    doc.text(`Restricciones: ${cab.restriccion_final || "Ninguna"}`, 14, yFinal + 6);
+    doc.text(`Recomendaciones: ${cab.recomendacion_final || "Ninguna"}`, 14, yFinal + 12);
+    doc.text(`Medico responsable: ${cab.medico_responsable || "No consignado"}`, 14, yFinal + 18);
+
+    const safeCode = String(cab.codigo || `orden_${detalleModalData.id}`).replace(/[^A-Za-z0-9_-]/g, "_");
+    doc.save(`historia_clinica_ocupacional_${safeCode}.pdf`);
+    setMessage(`Historia clinica PDF generada: ${safeCode}`);
+  };
+
+  const onEditarHistoria = (row) => {
+    setHistoriaEditingId(Number(row.id));
+    setHistoriaError("");
+    setHistoriaForm({
+      motivo_evaluacion: row.motivo_evaluacion || "",
+      puesto_actual: row.puesto_actual || "",
+      area_trabajo: row.area_trabajo || "",
+      tiempo_puesto_meses: row.tiempo_puesto_meses ?? "",
+      observaciones: row.observaciones || "",
+      antecedentes_laborales_json: prettyJsonInput(row.antecedentes_laborales_json),
+      antecedentes_patologicos_json: prettyJsonInput(row.antecedentes_patologicos_json),
+      habitos_json: prettyJsonInput(row.habitos_json),
+    });
+  };
+
+  const onCancelarHistoria = () => {
+    setHistoriaEditingId(0);
+    setHistoriaError("");
+    setHistoriaForm({
+      motivo_evaluacion: "",
+      puesto_actual: detalleModalData?.puesto_trabajo || "",
+      area_trabajo: "",
+      tiempo_puesto_meses: "",
+      observaciones: "",
+      antecedentes_laborales_json: "[]",
+      antecedentes_patologicos_json: "[]",
+      habitos_json: "[]",
+    });
+  };
+
+  const onGuardarHistoria = async (e) => {
+    e.preventDefault();
+    if (!detalleModalData?.id) return;
+    setHistoriaSaving(true);
+    setHistoriaError("");
+    try {
+      await guardarHistoriaOcupacional({
+        id: historiaEditingId || undefined,
+        orden_id: detalleModalData.id,
+        ...historiaForm,
+      });
+      await recargarDetalleModal(detalleModalData.id);
+      onCancelarHistoria();
+      setMessage(historiaEditingId ? "Historia ocupacional actualizada" : "Historia ocupacional registrada");
+    } catch (err) {
+      setHistoriaError(err.message || "No se pudo guardar historia ocupacional");
+    } finally {
+      setHistoriaSaving(false);
+    }
+  };
+
+  const onAnularHistoria = async (row) => {
+    if (!row?.id || !detalleModalData?.id) return;
+    if (!window.confirm("Desea anular este registro de historia ocupacional?")) return;
+    const motivo = window.prompt("Motivo de anulacion de la historia ocupacional:", row.anulado_motivo || "") || "";
+    setHistoriaAnulandoId(Number(row.id));
+    setHistoriaError("");
+    try {
+      await anularHistoriaOcupacional({ id: row.id, motivo });
+      await recargarDetalleModal(detalleModalData.id);
+      setMessage("Historia ocupacional anulada");
+    } catch (err) {
+      setHistoriaError(err.message || "No se pudo anular historia ocupacional");
+    } finally {
+      setHistoriaAnulandoId(0);
+    }
   };
 
   const onGuardarAptitud = async () => {
@@ -393,7 +868,17 @@ export default function OrdenesOcupacionalesPage() {
 
       const safeCode = String(det.codigo || `orden_${ordenId}`).replace(/[^A-Za-z0-9_-]/g, "_");
       doc.save(`certificado_aptitud_${safeCode}.pdf`);
-      setMessage(`Certificado emitido: ${safeCode}`);
+      let auditOk = true;
+      try {
+        await registrarEmisionCertificadoOrdenOcupacional({ id: Number(det.id || ordenId), formato: "pdf" });
+      } catch {
+        auditOk = false;
+      }
+
+      if (detalleModalData?.id && Number(detalleModalData.id) === Number(det.id || ordenId)) {
+        await recargarDetalleModal(detalleModalData.id);
+      }
+      setMessage(auditOk ? `Certificado emitido: ${safeCode}` : `Certificado emitido: ${safeCode} (sin auditoria)`);
     } catch (err) {
       setError(err.message || "No se pudo emitir certificado");
     } finally {
@@ -1218,14 +1703,24 @@ export default function OrdenesOcupacionalesPage() {
                           </td>
                           <td className="py-2 pr-3 text-xs text-slate-600">{it.fecha_ejecucion || "-"}</td>
                           <td className="py-2 pr-3">
-                            <button
-                              type="button"
-                              className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
-                              onClick={() => onGuardarDetalle(it.id)}
-                              disabled={savingDetalleId === it.id || detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
-                            >
-                              {savingDetalleId === it.id ? "Guardando..." : "Guardar"}
-                            </button>
+                            <div className="flex flex-wrap gap-1">
+                              <button
+                                type="button"
+                                className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                onClick={() => onAbrirFormatoClinico(it)}
+                                disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
+                              >
+                                Formato
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
+                                onClick={() => onGuardarDetalle(it.id)}
+                                disabled={savingDetalleId === it.id || detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
+                              >
+                                {savingDetalleId === it.id ? "Guardando..." : "Guardar"}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1301,6 +1796,173 @@ export default function OrdenesOcupacionalesPage() {
                   </div>
                 </div>
 
+                <div className="mt-4 rounded border border-cyan-200 bg-cyan-50/40 p-3">
+                  <h4 className="mb-2 text-sm font-semibold text-cyan-900">Historia ocupacional</h4>
+                  <p className="mb-3 text-xs text-cyan-800">
+                    Gestion de historia ocupacional por orden, manteniendo la logica legacy mientras la orden siga editable.
+                  </p>
+
+                  <form onSubmit={onGuardarHistoria} className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <input
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Motivo de evaluacion"
+                      value={historiaForm.motivo_evaluacion}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, motivo_evaluacion: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <input
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Puesto actual"
+                      value={historiaForm.puesto_actual}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, puesto_actual: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <input
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Area de trabajo"
+                      value={historiaForm.area_trabajo}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, area_trabajo: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Tiempo en puesto (meses)"
+                      value={historiaForm.tiempo_puesto_meses}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, tiempo_puesto_meses: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2"
+                      rows={2}
+                      placeholder="Observaciones"
+                      value={historiaForm.observaciones}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, observaciones: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+                      rows={4}
+                      placeholder="Antecedentes laborales JSON"
+                      value={historiaForm.antecedentes_laborales_json}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, antecedentes_laborales_json: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+                      rows={4}
+                      placeholder="Antecedentes patologicos JSON"
+                      value={historiaForm.antecedentes_patologicos_json}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, antecedentes_patologicos_json: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="rounded border border-slate-300 px-2 py-1 font-mono text-xs md:col-span-2"
+                      rows={4}
+                      placeholder="Habitos JSON"
+                      value={historiaForm.habitos_json}
+                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, habitos_json: e.target.value }))}
+                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <div className="md:col-span-2 flex flex-wrap gap-2">
+                      <button
+                        type="submit"
+                        className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
+                        disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                      >
+                        {historiaSaving ? "Guardando..." : historiaEditingId ? "Actualizar historia" : "Registrar historia"}
+                      </button>
+                      {historiaEditingId ? (
+                        <button
+                          type="button"
+                          className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                          onClick={onCancelarHistoria}
+                        >
+                          Cancelar edicion
+                        </button>
+                      ) : null}
+                    </div>
+                  </form>
+
+                  {historiaLoading ? <p className="mt-3 text-xs text-slate-500">Cargando historia ocupacional...</p> : null}
+                  {historiaError ? <p className="mt-3 text-xs text-red-600">{historiaError}</p> : null}
+
+                  <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+                    {historiaRows.length === 0 && !historiaLoading ? (
+                      <p className="text-xs text-slate-500">No hay historia ocupacional registrada para esta orden.</p>
+                    ) : null}
+                    {historiaRows.map((row) => (
+                      <div key={row.id} className="rounded border border-cyan-100 bg-white p-2 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-semibold text-slate-700">Registro #{row.id} - {row.created_at || ""}</p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              className="rounded border border-blue-300 px-2 py-1 text-[11px] text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                              onClick={() => onEditarHistoria(row)}
+                              disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
+                              onClick={() => onAnularHistoria(row)}
+                              disabled={historiaAnulandoId === row.id || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                            >
+                              {historiaAnulandoId === row.id ? "Anulando..." : "Anular"}
+                            </button>
+                          </div>
+                        </div>
+                        <p className="mt-1 text-slate-600"><strong>Motivo:</strong> {row.motivo_evaluacion || "-"}</p>
+                        <p className="text-slate-600"><strong>Puesto:</strong> {row.puesto_actual || "-"} | <strong>Area:</strong> {row.area_trabajo || "-"} | <strong>Meses:</strong> {row.tiempo_puesto_meses ?? "-"}</p>
+                        <p className="text-slate-600"><strong>Observaciones:</strong> {row.observaciones || "-"}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded border border-indigo-200 bg-indigo-50/40 p-3">
+                  <h4 className="mb-2 text-sm font-semibold text-indigo-900">Historia clinica ocupacional consolidada</h4>
+                  <p className="mb-3 text-xs text-indigo-800">
+                    Vista clinica resumida de la orden con avance de examenes, hallazgos operativos e historia ocupacional registrada.
+                  </p>
+
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                      onClick={onRecargarClinicaConsolidada}
+                      disabled={clinicaLoading}
+                    >
+                      {clinicaLoading ? "Recargando..." : "Recargar consolidado"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                      onClick={exportHistoriaClinicaPdf}
+                      disabled={clinicaLoading || !detalleModalData?.id}
+                    >
+                      PDF clinico
+                    </button>
+                  </div>
+
+                  {clinicaLoading ? <p className="text-xs text-slate-500">Cargando consolidado clinico...</p> : null}
+                  {clinicaError ? <p className="text-xs text-red-600">{clinicaError}</p> : null}
+
+                  {clinicaConsolidada?.resumen ? (
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+                      <div className="rounded border border-slate-200 bg-white p-2 text-xs">Total: <strong>{clinicaConsolidada.resumen.total_items || 0}</strong></div>
+                      <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-xs">Completados: <strong>{clinicaConsolidada.resumen.total_completados || 0}</strong></div>
+                      <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs">Observados: <strong>{clinicaConsolidada.resumen.total_observados || 0}</strong></div>
+                      <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs">Pendientes: <strong>{clinicaConsolidada.resumen.total_pendientes || 0}</strong></div>
+                      <div className="rounded border border-cyan-200 bg-cyan-50 p-2 text-xs">Avance: <strong>{clinicaConsolidada.resumen.porcentaje_avance || 0}%</strong></div>
+                      <div className="rounded border border-violet-200 bg-violet-50 p-2 text-xs">Historias: <strong>{clinicaConsolidada.resumen.historias_registradas || 0}</strong></div>
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="mt-4 rounded border border-slate-200 p-3">
                   <h4 className="mb-2 text-sm font-semibold text-slate-800">Bitacora de eventos</h4>
                   <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1315,6 +1977,9 @@ export default function OrdenesOcupacionalesPage() {
                       <option value="orden_cerrada">orden_cerrada</option>
                       <option value="orden_anulada">orden_anulada</option>
                       <option value="aptitud_final_guardada">aptitud_final_guardada</option>
+                      <option value="certificado_emitido">certificado_emitido</option>
+                      <option value="plantilla_guardada">plantilla_guardada</option>
+                      <option value="plantilla_eliminada">plantilla_eliminada</option>
                     </select>
                     <input
                       type="date"
@@ -1372,6 +2037,143 @@ export default function OrdenesOcupacionalesPage() {
                   </div>
                 </div>
               </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {formatoModalOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className="text-base font-semibold text-slate-900">Formato clinico por examen</h3>
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-1 text-xs"
+                onClick={() => setFormatoModalOpen(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {formatoModalLoading ? <p className="text-sm text-slate-500">Cargando formato...</p> : null}
+            {formatoModalError ? <p className="text-sm text-red-600">{formatoModalError}</p> : null}
+
+            {!formatoModalLoading ? (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-600">
+                  Examen: <strong>{formatoForm.examenCodigo}</strong> - {formatoForm.examenDescripcion}
+                </p>
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                  <input
+                    className="rounded border border-slate-300 px-2 py-1 text-xs"
+                    value={formatoForm.formatoCodigo}
+                    onChange={(e) => setFormatoForm((prev) => ({ ...prev, formatoCodigo: e.target.value }))}
+                    placeholder="Codigo formato"
+                    disabled={formatoModalSaving}
+                  />
+                  <select
+                    className="rounded border border-slate-300 px-2 py-1 text-xs"
+                    value={formatoForm.estado}
+                    onChange={(e) => setFormatoForm((prev) => ({ ...prev, estado: e.target.value }))}
+                    disabled={formatoModalSaving}
+                  >
+                    <option value="borrador">borrador</option>
+                    <option value="finalizado">finalizado</option>
+                    <option value="anulado">anulado</option>
+                  </select>
+                  <input
+                    className="rounded border border-slate-300 px-2 py-1 text-xs"
+                    value={formatoForm.observacion}
+                    onChange={(e) => setFormatoForm((prev) => ({ ...prev, observacion: e.target.value }))}
+                    placeholder="Observacion clinica"
+                    disabled={formatoModalSaving}
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                    onClick={onCargarPlantillaSugeridaFormato}
+                    disabled={formatoModalSaving || formatoModalLoading || formatoPlantillaSaving}
+                  >
+                    Cargar plantilla sugerida
+                  </button>
+                  <p className="text-[11px] text-slate-500">Puede ajustar el JSON sugerido antes de guardar.</p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                  <input
+                    className="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2"
+                    value={formatoPlantillaNombre}
+                    onChange={(e) => setFormatoPlantillaNombre(e.target.value)}
+                    placeholder="Nombre de plantilla"
+                    disabled={formatoModalSaving || formatoModalLoading || formatoPlantillaSaving}
+                  />
+                  <select
+                    className="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2"
+                    value={formatoPlantillaSeleccionada}
+                    onChange={(e) => setFormatoPlantillaSeleccionada(e.target.value)}
+                    disabled={formatoModalSaving || formatoModalLoading || formatoPlantillaSaving}
+                  >
+                    {(formatoModalData?.plantillasDisponibles || []).map((tpl) => (
+                      <option key={`${tpl.id || 0}-${tpl.codigo || "tpl"}`} value={String(tpl.id || 0)}>
+                        {tpl.nombre || tpl.codigo || `Plantilla ${tpl.id || 0}`}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                    onClick={onAplicarPlantillaSeleccionada}
+                    disabled={formatoModalSaving || formatoModalLoading || formatoPlantillaSaving}
+                  >
+                    Aplicar seleccionada
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-amber-300 px-2 py-1 text-xs text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                    onClick={onGuardarPlantillaCatalogo}
+                    disabled={formatoModalSaving || formatoModalLoading || formatoPlantillaSaving}
+                  >
+                    {formatoPlantillaSaving ? "Guardando..." : "Guardar como plantilla"}
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    onClick={onEliminarPlantillaCatalogo}
+                    disabled={formatoModalSaving || formatoModalLoading || formatoPlantillaSaving || Number(formatoPlantillaSeleccionada || 0) <= 0}
+                  >
+                    Eliminar plantilla seleccionada
+                  </button>
+                  <p className="text-[11px] text-slate-500">Solo se eliminan plantillas guardadas en catalogo (no la sugerida del sistema).</p>
+                </div>
+
+                <textarea
+                  className="w-full rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+                  rows={16}
+                  value={formatoForm.datosJsonText}
+                  onChange={(e) => setFormatoForm((prev) => ({ ...prev, datosJsonText: e.target.value }))}
+                  placeholder='{"hallazgos":"", "conclusion":""}'
+                  disabled={formatoModalSaving}
+                />
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
+                    onClick={onGuardarFormatoClinico}
+                    disabled={formatoModalSaving}
+                  >
+                    {formatoModalSaving ? "Guardando..." : "Guardar formato"}
+                  </button>
+                </div>
+              </div>
             ) : null}
           </div>
         </div>

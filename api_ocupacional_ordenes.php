@@ -278,21 +278,22 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
     $edadPaciente = calculate_age_orden($paciente['fecha_nacimiento'] ?? '');
     $puestoTrabajador = normalize_text_orden($trabajador['puesto_trabajo'] ?? '');
 
-    $stmtRows = $mysqliOcup->prepare('SELECT
-                                        pd.catalogo_id,
-                                        c.examen_id,
-                                        e.codigo,
-                                        e.descripcion,
-                                        pd.monto
-                                      FROM ocupacional_protocolo_detalle pd
-                                      INNER JOIN ocupacional_catalogo_empresas c ON c.id = pd.catalogo_id
-                                      INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
-                                      WHERE pd.protocolo_id = ?
-                                        AND pd.tipo_evaluacion_id = ?
-                                        AND c.empresa_id = ?
-                                        AND c.estado = "activo"
-                                        AND e.estado = "activo"
-                                      ORDER BY e.grupo ASC, e.subgrupo ASC, e.descripcion ASC, e.id DESC');
+        $stmtRows = $mysqliOcup->prepare('SELECT
+                                                                                c.id AS catalogo_id,
+                                                                                c.examen_id,
+                                                                                e.codigo,
+                                                                                e.descripcion,
+                                                                                CASE WHEN pd.id IS NOT NULL THEN pd.monto ELSE e.precio END AS monto,
+                                                                                CASE WHEN pd.id IS NOT NULL THEN 1 ELSE 0 END AS tiene_config_protocolo
+                                                                            FROM ocupacional_catalogo_empresas c
+                                                                            INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
+                                                                            LEFT JOIN ocupacional_protocolo_detalle pd ON pd.catalogo_id = c.id
+                                                                                                                                                            AND pd.protocolo_id = ?
+                                                                                                                                                            AND pd.tipo_evaluacion_id = ?
+                                                                            WHERE c.empresa_id = ?
+                                                                                AND c.estado = "activo"
+                                                                                AND e.estado = "activo"
+                                                                            ORDER BY e.grupo ASC, e.subgrupo ASC, e.descripcion ASC, e.id DESC');
     if (!$stmtRows) {
         out_orden(500, ['success' => false, 'error' => 'No se pudo consultar detalle del protocolo']);
     }
@@ -311,6 +312,7 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
             'codigo' => (string)$row['codigo'],
             'descripcion' => (string)$row['descripcion'],
             'monto' => number_format((float)$row['monto'], 2, '.', ''),
+            'tiene_config_protocolo' => (int)($row['tiene_config_protocolo'] ?? 0) === 1,
             'aplica' => false,
             'motivo' => 'Sin evaluacion',
         ];
@@ -359,6 +361,12 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
     $total = 0.0;
     $aplican = 0;
     foreach ($items as $catalogoId => &$item) {
+        if (!empty($item['tiene_config_protocolo']) && (float)$item['monto'] <= 0) {
+            $item['aplica'] = false;
+            $item['motivo'] = 'Excluido en protocolo';
+            continue;
+        }
+
         $condiciones = $condicionesByCatalogo[$catalogoId] ?? [];
 
         if (empty($condiciones)) {
@@ -1405,6 +1413,58 @@ if ($accion === 'guardar_aptitud_orden') {
         'data' => [
             'id' => $ordenId,
             'aptitud_final' => $aptitudFinal,
+        ],
+    ]);
+}
+
+if ($accion === 'registrar_emision_certificado_orden') {
+    require_ocup_permiso_any_orden(['cerrar_ordenes_ocupacional', 'emitir_certificados_ocupacional']);
+    $ordenId = (int)($payload['id'] ?? 0);
+    $formato = trim((string)($payload['formato'] ?? 'pdf'));
+
+    if ($ordenId <= 0) {
+        out_orden(422, ['success' => false, 'error' => 'id de orden es obligatorio']);
+    }
+
+    $stmt = $mysqliOcup->prepare('SELECT id, codigo, estado, aptitud_final
+                                  FROM ocupacional_ordenes
+                                  WHERE id = ? LIMIT 1');
+    if (!$stmt) {
+        out_orden(500, ['success' => false, 'error' => 'No se pudo validar orden para registrar certificado']);
+    }
+    $stmt->bind_param('i', $ordenId);
+    $stmt->execute();
+    $orden = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    if (!$orden) {
+        out_orden(404, ['success' => false, 'error' => 'Orden no encontrada']);
+    }
+    if ((string)$orden['estado'] !== 'cerrada') {
+        out_orden(422, ['success' => false, 'error' => 'El certificado solo puede emitirse para orden cerrada']);
+    }
+    if (trim((string)($orden['aptitud_final'] ?? '')) === '') {
+        out_orden(422, ['success' => false, 'error' => 'Debe registrar aptitud final antes de emitir certificado']);
+    }
+
+    registrar_evento_orden(
+        $mysqliOcup,
+        $ordenId,
+        'certificado_emitido',
+        'Certificado de aptitud ocupacional emitido',
+        $usuarioId,
+        [
+            'codigo' => (string)($orden['codigo'] ?? ''),
+            'formato' => $formato !== '' ? $formato : 'pdf',
+        ]
+    );
+
+    out_orden(200, [
+        'success' => true,
+        'data' => [
+            'id' => $ordenId,
+            'codigo' => (string)($orden['codigo'] ?? ''),
+            'formato' => $formato !== '' ? $formato : 'pdf',
         ],
     ]);
 }
