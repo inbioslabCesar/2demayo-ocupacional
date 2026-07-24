@@ -1,9 +1,7 @@
-USE `2demayo_so`;
-
 SET @exists_emp_estado_created = (
   SELECT COUNT(*)
   FROM information_schema.statistics
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'empresas_ocupacionales'
     AND index_name = 'idx_emp_estado_created'
 );
@@ -19,7 +17,7 @@ DEALLOCATE PREPARE stmt;
 SET @exists_pac_estado_fecha = (
   SELECT COUNT(*)
   FROM information_schema.statistics
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'pacientes_ocupacionales'
     AND index_name = 'idx_pac_estado_fecha'
 );
@@ -35,7 +33,7 @@ DEALLOCATE PREPARE stmt;
 SET @exists_pac_empresa_fecha = (
   SELECT COUNT(*)
   FROM information_schema.statistics
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'pacientes_ocupacionales'
     AND index_name = 'idx_pac_empresa_fecha'
 );

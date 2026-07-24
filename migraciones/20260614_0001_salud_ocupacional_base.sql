@@ -1,9 +1,4 @@
--- Base schema for isolated Salud Ocupacional database.
-CREATE DATABASE IF NOT EXISTS `2demayo_so`
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-USE `2demayo_so`;
+-- Base schema for Salud Ocupacional on the currently selected database.
 
 CREATE TABLE IF NOT EXISTS `empresas_ocupacionales` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
