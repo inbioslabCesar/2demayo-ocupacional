@@ -469,6 +469,53 @@ export async function listarTiposEvaluacionOcupacional() {
   return payload.data || [];
 }
 
+export async function listarTiposEvaluacionOcupacionalGestion({ estado = "todos" } = {}) {
+  const params = new URLSearchParams({
+    accion: "listar_tipos_gestion",
+    estado,
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function guardarTipoEvaluacionOcupacional({
+  id,
+  codigo,
+  nombre,
+  orden = 0,
+  estado = "activo",
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar_tipo_evaluacion",
+      ...(id ? { id: Number(id) } : {}),
+      codigo: String(codigo || "").trim().toUpperCase(),
+      nombre: String(nombre || "").trim(),
+      orden: Number(orden || 0),
+      estado: String(estado || "activo"),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function cambiarEstadoTipoEvaluacionOcupacional({ id, estado } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "cambiar_estado_tipo_evaluacion",
+      id: Number(id || 0),
+      estado: String(estado || "").trim().toLowerCase(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
 export async function listarPlantillasCondicionesOcupacionales() {
   const params = new URLSearchParams({ accion: "listar_plantillas_condiciones" });
   const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php?${params.toString()}`);

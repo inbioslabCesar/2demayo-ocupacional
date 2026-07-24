@@ -204,6 +204,14 @@ export default function SidebarAdmin({ onClose }) {
           <span>Exámenes Generales</span>
         </Link>
         <Link
+          to="/salud-ocupacional/tipos-evaluacion"
+          className="py-2.5 px-3 rounded-lg text-indigo-700 hover:bg-gradient-to-r hover:from-indigo-50 hover:to-blue-100 font-medium flex items-center gap-3 transition-all duration-300"
+          onClick={onClose}
+        >
+          <Icon iconName="NumberSequence" className="text-lg text-indigo-600" />
+          <span>Tipos Evaluación</span>
+        </Link>
+        <Link
           to="/salud-ocupacional/grupos-examenes"
           className="py-2.5 px-3 rounded-lg text-teal-700 hover:bg-gradient-to-r hover:from-teal-50 hover:to-cyan-100 font-medium flex items-center gap-3 transition-all duration-300"
           onClick={onClose}

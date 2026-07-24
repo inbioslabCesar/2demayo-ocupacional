@@ -91,22 +91,216 @@ foreach ($requiredTables as $table) {
     }
 }
 
-function listar_tipos_evaluacion_proto($conn)
+function listar_tipos_evaluacion_proto($conn, $estado = 'activo')
 {
-    $sql = 'SELECT id, codigo, nombre, orden FROM ocupacional_tipos_evaluacion WHERE estado = "activo" ORDER BY orden ASC, id ASC';
-    $res = $conn->query($sql);
-    $rows = [];
-    if ($res) {
-        while ($r = $res->fetch_assoc()) {
-            $rows[] = [
-                'id' => (int)$r['id'],
-                'codigo' => (string)$r['codigo'],
-                'nombre' => (string)$r['nombre'],
-                'orden' => (int)$r['orden'],
-            ];
-        }
+    $estado = trim((string)$estado);
+    if (!in_array($estado, ['activo', 'inactivo', 'todos'], true)) {
+        $estado = 'activo';
     }
+
+    $sql = 'SELECT id, codigo, nombre, orden, estado, created_at, updated_at
+            FROM ocupacional_tipos_evaluacion';
+    if ($estado !== 'todos') {
+        $sql .= ' WHERE estado = ?';
+    }
+    $sql .= ' ORDER BY orden ASC, id ASC';
+
+    $rows = [];
+    if ($estado === 'todos') {
+        $res = $conn->query($sql);
+        if ($res) {
+            while ($r = $res->fetch_assoc()) {
+                $rows[] = [
+                    'id' => (int)$r['id'],
+                    'codigo' => (string)$r['codigo'],
+                    'nombre' => (string)$r['nombre'],
+                    'orden' => (int)$r['orden'],
+                    'estado' => (string)($r['estado'] ?? 'activo'),
+                    'created_at' => (string)($r['created_at'] ?? ''),
+                    'updated_at' => (string)($r['updated_at'] ?? ''),
+                ];
+            }
+        }
+        return $rows;
+    }
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        return $rows;
+    }
+    $stmt->bind_param('s', $estado);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    while ($r = $res->fetch_assoc()) {
+        $rows[] = [
+            'id' => (int)$r['id'],
+            'codigo' => (string)$r['codigo'],
+            'nombre' => (string)$r['nombre'],
+            'orden' => (int)$r['orden'],
+            'estado' => (string)($r['estado'] ?? 'activo'),
+            'created_at' => (string)($r['created_at'] ?? ''),
+            'updated_at' => (string)($r['updated_at'] ?? ''),
+        ];
+    }
+    $stmt->close();
+
     return $rows;
+}
+
+function normalize_tipo_codigo_proto($value)
+{
+    $raw = strtoupper(trim((string)$value));
+    return preg_replace('/[^A-Z0-9_]/', '', $raw);
+}
+
+function validate_tipo_payload_proto($codigo, $nombre, $orden)
+{
+    if ($codigo === '' || strlen($codigo) < 2 || strlen($codigo) > 20) {
+        out_proto(422, ['success' => false, 'error' => 'codigo invalido (2-20, solo A-Z, 0-9, _)']);
+    }
+    if ($nombre === '' || strlen($nombre) > 80) {
+        out_proto(422, ['success' => false, 'error' => 'nombre invalido (1-80)']);
+    }
+    if ($orden < 0 || $orden > 9999) {
+        out_proto(422, ['success' => false, 'error' => 'orden fuera de rango']);
+    }
+}
+
+function tipo_in_use_proto($conn, $tipoId)
+{
+    $stmt = $conn->prepare('SELECT 1 FROM ocupacional_protocolo_detalle WHERE tipo_evaluacion_id = ? LIMIT 1');
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param('i', $tipoId);
+    $stmt->execute();
+    $used = (bool)$stmt->get_result()->fetch_row();
+    $stmt->close();
+    return $used;
+}
+
+function get_tipo_proto($conn, $tipoId)
+{
+    $stmt = $conn->prepare('SELECT id, codigo, nombre, orden, estado, created_at, updated_at FROM ocupacional_tipos_evaluacion WHERE id = ? LIMIT 1');
+    if (!$stmt) {
+        return null;
+    }
+    $stmt->bind_param('i', $tipoId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    if (!$row) {
+        return null;
+    }
+    return [
+        'id' => (int)$row['id'],
+        'codigo' => (string)$row['codigo'],
+        'nombre' => (string)$row['nombre'],
+        'orden' => (int)$row['orden'],
+        'estado' => (string)$row['estado'],
+        'created_at' => (string)($row['created_at'] ?? ''),
+        'updated_at' => (string)($row['updated_at'] ?? ''),
+    ];
+}
+
+function tipo_exists_by_codigo_proto($conn, $codigo, $excludeId = 0)
+{
+    if ($excludeId > 0) {
+        $stmt = $conn->prepare('SELECT id FROM ocupacional_tipos_evaluacion WHERE codigo = ? AND id <> ? LIMIT 1');
+        if (!$stmt) {
+            return false;
+        }
+        $stmt->bind_param('si', $codigo, $excludeId);
+    } else {
+        $stmt = $conn->prepare('SELECT id FROM ocupacional_tipos_evaluacion WHERE codigo = ? LIMIT 1');
+        if (!$stmt) {
+            return false;
+        }
+        $stmt->bind_param('s', $codigo);
+    }
+    $stmt->execute();
+    $dup = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return (bool)$dup;
+}
+
+function guardar_tipo_evaluacion_proto($conn, $payload, $usuarioId)
+{
+    $id = (int)($payload['id'] ?? 0);
+    $codigo = normalize_tipo_codigo_proto($payload['codigo'] ?? '');
+    $nombre = trim((string)($payload['nombre'] ?? ''));
+    $orden = (int)($payload['orden'] ?? 0);
+    $estado = trim((string)($payload['estado'] ?? 'activo'));
+    if (!in_array($estado, ['activo', 'inactivo'], true)) {
+        $estado = 'activo';
+    }
+
+    validate_tipo_payload_proto($codigo, $nombre, $orden);
+
+    if ($id > 0) {
+        $actual = get_tipo_proto($conn, $id);
+        if (!$actual) {
+            out_proto(404, ['success' => false, 'error' => 'Tipo de evaluacion no encontrado']);
+        }
+        if (tipo_exists_by_codigo_proto($conn, $codigo, $id)) {
+            out_proto(409, ['success' => false, 'error' => 'Ya existe otro tipo con ese codigo']);
+        }
+
+        $stmt = $conn->prepare('UPDATE ocupacional_tipos_evaluacion
+                                SET codigo = ?, nombre = ?, orden = ?, estado = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ? LIMIT 1');
+        if (!$stmt) {
+            out_proto(500, ['success' => false, 'error' => 'No se pudo actualizar tipo de evaluacion']);
+        }
+        $stmt->bind_param('ssisi', $codigo, $nombre, $orden, $estado, $id);
+        $stmt->execute();
+        $stmt->close();
+
+        out_proto(200, ['success' => true, 'data' => get_tipo_proto($conn, $id)]);
+    }
+
+    if (tipo_exists_by_codigo_proto($conn, $codigo, 0)) {
+        out_proto(409, ['success' => false, 'error' => 'Ya existe un tipo con ese codigo']);
+    }
+
+    $stmt = $conn->prepare('INSERT INTO ocupacional_tipos_evaluacion (codigo, nombre, orden, estado) VALUES (?, ?, ?, ?)');
+    if (!$stmt) {
+        out_proto(500, ['success' => false, 'error' => 'No se pudo crear tipo de evaluacion']);
+    }
+    $stmt->bind_param('ssis', $codigo, $nombre, $orden, $estado);
+    $stmt->execute();
+    $newId = (int)$stmt->insert_id;
+    $stmt->close();
+
+    out_proto(201, ['success' => true, 'data' => get_tipo_proto($conn, $newId)]);
+}
+
+function cambiar_estado_tipo_evaluacion_proto($conn, $payload)
+{
+    $id = (int)($payload['id'] ?? 0);
+    $estado = trim((string)($payload['estado'] ?? ''));
+    if ($id <= 0 || !in_array($estado, ['activo', 'inactivo'], true)) {
+        out_proto(422, ['success' => false, 'error' => 'id y estado (activo|inactivo) son obligatorios']);
+    }
+
+    $actual = get_tipo_proto($conn, $id);
+    if (!$actual) {
+        out_proto(404, ['success' => false, 'error' => 'Tipo de evaluacion no encontrado']);
+    }
+
+    if ($estado === 'inactivo' && tipo_in_use_proto($conn, $id)) {
+        out_proto(409, ['success' => false, 'error' => 'No se puede inactivar: el tipo tiene montos configurados en protocolos']);
+    }
+
+    $stmt = $conn->prepare('UPDATE ocupacional_tipos_evaluacion SET estado = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? LIMIT 1');
+    if (!$stmt) {
+        out_proto(500, ['success' => false, 'error' => 'No se pudo actualizar estado del tipo']);
+    }
+    $stmt->bind_param('si', $estado, $id);
+    $stmt->execute();
+    $stmt->close();
+
+    out_proto(200, ['success' => true, 'data' => get_tipo_proto($conn, $id)]);
 }
 
 function listar_plantillas_condiciones_proto()
@@ -145,6 +339,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     if ($accion === 'tipos') {
         out_proto(200, ['success' => true, 'data' => listar_tipos_evaluacion_proto($mysqliOcup)]);
+    }
+
+    if ($accion === 'listar_tipos_gestion') {
+        $estado = trim((string)($_GET['estado'] ?? 'todos'));
+        if (!in_array($estado, ['activo', 'inactivo', 'todos'], true)) {
+            out_proto(422, ['success' => false, 'error' => 'estado invalido']);
+        }
+        out_proto(200, ['success' => true, 'data' => listar_tipos_evaluacion_proto($mysqliOcup, $estado)]);
     }
 
     if ($accion === 'listar_plantillas_condiciones') {
@@ -568,6 +770,14 @@ if ($accion === 'guardar_protocolo') {
             'montos_base_sembrados' => $montosBaseSembrados,
         ],
     ]);
+}
+
+if ($accion === 'guardar_tipo_evaluacion') {
+    guardar_tipo_evaluacion_proto($mysqliOcup, $payload, $usuarioId);
+}
+
+if ($accion === 'cambiar_estado_tipo_evaluacion') {
+    cambiar_estado_tipo_evaluacion_proto($mysqliOcup, $payload);
 }
 
 if ($accion === 'inactivar_protocolo') {
