@@ -10,10 +10,14 @@ import autoTable from "jspdf-autotable";
 export const exportarExcel = (medicos) => {
   try {
     // Solo exportar columnas relevantes
-    const data = medicos.map(({ id, nombre, especialidad, email }) => ({ 
+    const data = medicos.map(({ id, nombre, apellido, especialidad, dni, cmp, rne, celular, email }) => ({ 
       ID: id, 
-      Nombre: nombre, 
+      Nombre: `${nombre || ''} ${apellido || ''}`.trim(), 
       Especialidad: especialidad, 
+      DNI: dni || '',
+      CMP: cmp || '',
+      RNE: rne || '',
+      Celular: celular || '',
       Email: email 
     }));
     
@@ -26,6 +30,10 @@ export const exportarExcel = (medicos) => {
       { wch: 8 },  // ID
       { wch: 25 }, // Nombre
       { wch: 20 }, // Especialidad
+      { wch: 12 }, // DNI
+      { wch: 12 }, // CMP
+      { wch: 12 }, // RNE
+      { wch: 14 }, // Celular
       { wch: 30 }  // Email
     ];
     ws['!cols'] = columnWidths;
@@ -67,6 +75,10 @@ export const exportarPDF = (medicos) => {
       { header: "ID", dataKey: "id" },
       { header: "Nombre", dataKey: "nombre" },
       { header: "Especialidad", dataKey: "especialidad" },
+      { header: "DNI", dataKey: "dni" },
+      { header: "CMP", dataKey: "cmp" },
+      { header: "RNE", dataKey: "rne" },
+      { header: "Celular", dataKey: "celular" },
       { header: "Email", dataKey: "email" }
     ];
     
@@ -75,6 +87,10 @@ export const exportarPDF = (medicos) => {
       id: medico.id,
       nombre: `${medico.nombre} ${medico.apellido || ''}`.trim(),
       especialidad: medico.especialidad,
+      dni: medico.dni || '',
+      cmp: medico.cmp || '',
+      rne: medico.rne || '',
+      celular: medico.celular || '',
       email: medico.email
     }));
     

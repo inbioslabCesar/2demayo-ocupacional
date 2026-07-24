@@ -259,6 +259,16 @@ export default function SidebarRecepcionista({ onClose, usuario }) {
           )}
           {can("gestionar_empresas_ocupacional") && (
             <Link
+              to="/salud-ocupacional/grupos-examenes"
+              className="py-2.5 px-3 rounded-lg text-teal-700 hover:bg-gradient-to-r hover:from-teal-50 hover:to-cyan-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="BulletedTreeList" className="text-lg text-teal-600" />
+              <span>Grupo Exámenes</span>
+            </Link>
+          )}
+          {can("gestionar_empresas_ocupacional") && (
+            <Link
               to="/salud-ocupacional/catalogo-examenes"
               className="py-2.5 px-3 rounded-lg text-violet-700 hover:bg-gradient-to-r hover:from-violet-50 hover:to-fuchsia-100 font-medium flex items-center gap-3 transition-all duration-300"
               onClick={onClose}

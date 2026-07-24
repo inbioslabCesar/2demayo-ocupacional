@@ -25,6 +25,26 @@ const MedicoTable = ({
 }) => {
   const esAdminOrRecep = rolUsuario === 'administrador' || rolUsuario === 'recepcionista';
 
+  const getSortIcon = (column) => {
+    if (sortBy !== column) {
+      return (
+        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+        </svg>
+      );
+    }
+
+    return sortDir === 'asc' ? (
+      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+      </svg>
+    ) : (
+      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4" />
+      </svg>
+    );
+  };
+
   if (loading) {
     return (
       <div className="bg-white/70 backdrop-blur-sm border border-white/20 rounded-2xl p-8 shadow-lg">
@@ -68,26 +88,6 @@ const MedicoTable = ({
       </div>
     );
   }
-
-  const getSortIcon = (column) => {
-    if (sortBy !== column) {
-      return (
-        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-        </svg>
-      );
-    }
-    
-    return sortDir === 'asc' ? (
-      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
-      </svg>
-    ) : (
-      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4" />
-      </svg>
-    );
-  };
 
   return (
     <>
@@ -142,6 +142,15 @@ const MedicoTable = ({
                     {getSortIcon('email')}
                   </div>
                 </th>
+                <th 
+                  className="px-6 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors"
+                  onClick={() => onSort('dni')}
+                >
+                  <div className="flex items-center gap-2">
+                    DNI
+                    {getSortIcon('dni')}
+                  </div>
+                </th>
                 <th className="px-6 py-4 text-center font-semibold">
                   Acciones
                 </th>
@@ -178,6 +187,10 @@ const MedicoTable = ({
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-gray-900">{medico.email}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-gray-900 font-medium">{medico.dni || '-'}</div>
+                    <div className="text-xs text-gray-500">Cel: {medico.celular || '-'}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-center gap-2">
@@ -321,6 +334,14 @@ const MedicoTable = ({
                 </svg>
                 <span className="text-gray-600 text-sm">Email:</span>
                 <span className="text-gray-900 text-sm">{medico.email}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-600 text-sm">DNI:</span>
+                <span className="text-gray-900 text-sm font-medium">{medico.dni || '-'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-600 text-sm">Celular:</span>
+                <span className="text-gray-900 text-sm font-medium">{medico.celular || '-'}</span>
               </div>
             </div>
           </div>

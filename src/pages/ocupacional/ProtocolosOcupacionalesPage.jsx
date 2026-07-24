@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   listarEmpresasOcupacionales,
   listarPlantillasCondicionesOcupacionales,
@@ -19,7 +20,22 @@ function normalizeMoneyInput(value) {
   return String(value ?? "").replace(/[^0-9.,]/g, "").replace(',', '.');
 }
 
+const EMPRESA_STORAGE_KEY = "ocupacional_protocolos_empresa_id_v1";
+
+function readStoredEmpresaId() {
+  try {
+    const raw = window.localStorage.getItem(EMPRESA_STORAGE_KEY);
+    const n = Number(raw || 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export default function ProtocolosOcupacionalesPage() {
+  const [searchParams] = useSearchParams();
+  const empresaIdDesdeRuta = Number(searchParams.get("empresa_id") || 0);
+  const context = String(searchParams.get("context") || "").toLowerCase();
   const [empresas, setEmpresas] = useState([]);
   const [empresaId, setEmpresaId] = useState(0);
 
@@ -67,6 +83,7 @@ export default function ProtocolosOcupacionalesPage() {
   const [condBulkPreviewMsg, setCondBulkPreviewMsg] = useState("");
   const protocolosRequestRef = useRef(0);
   const matrizRequestRef = useRef(0);
+  const hydratedEmpresaRef = useRef(false);
   const [condForm, setCondForm] = useState({
     puesto_trabajo: "",
     sexo: "",
@@ -93,17 +110,48 @@ export default function ProtocolosOcupacionalesPage() {
     try {
       const data = await listarEmpresasOcupacionales({ estado: "activo" });
       setEmpresas(data);
-      if (!empresaId && data.length > 0) {
-        setEmpresaId(Number(data[0].id));
-      }
     } catch (err) {
       setError(err.message || "No se pudo cargar empresas");
     }
-  }, [empresaId]);
+  }, []);
 
   useEffect(() => {
     cargarEmpresas();
   }, [cargarEmpresas]);
+
+  useEffect(() => {
+    if (hydratedEmpresaRef.current || empresas.length === 0) {
+      return;
+    }
+
+    const empresaIdGuardada = readStoredEmpresaId();
+    const existe = (id) => empresas.some((e) => Number(e.id) === Number(id));
+
+    let empresaInicial = 0;
+    if (empresaIdDesdeRuta > 0 && existe(empresaIdDesdeRuta)) {
+      empresaInicial = empresaIdDesdeRuta;
+    } else if (empresaIdGuardada > 0 && existe(empresaIdGuardada)) {
+      empresaInicial = empresaIdGuardada;
+    } else if (empresas.length > 0) {
+      empresaInicial = Number(empresas[0].id);
+    }
+
+    if (empresaInicial > 0) {
+      setEmpresaId(empresaInicial);
+    }
+
+    hydratedEmpresaRef.current = true;
+  }, [empresas, empresaIdDesdeRuta]);
+
+  useEffect(() => {
+    try {
+      if (empresaId > 0) {
+        window.localStorage.setItem(EMPRESA_STORAGE_KEY, String(empresaId));
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [empresaId]);
 
   useEffect(() => {
     async function cargarPlantillas() {
@@ -261,9 +309,9 @@ export default function ProtocolosOcupacionalesPage() {
         setProtocoloId(Number(data.id));
       }
       if (Number(data?.montos_base_sembrados || 0) > 0) {
-        setMessage(`Protocolo creado con ${data.montos_base_sembrados} montos base listos.`);
+        setCopiarMsg(`Protocolo creado con ${data.montos_base_sembrados} montos base listos.`);
       } else {
-        setMessage("Protocolo creado correctamente.");
+        setCopiarMsg("Protocolo creado correctamente.");
       }
     } catch (err) {
       setError(err.message || "No se pudo guardar protocolo");
@@ -526,7 +574,7 @@ export default function ProtocolosOcupacionalesPage() {
       return;
     }
 
-    if (!window.confirm(`Se aplicara la condicion a examenes que coincidan con: \"${filtro}\". Desea continuar?`)) {
+    if (!window.confirm(`Se aplicara la condicion a examenes que coincidan con: "${filtro}". Desea continuar?`)) {
       return;
     }
 
@@ -715,6 +763,9 @@ export default function ProtocolosOcupacionalesPage() {
         <p className="text-sm text-slate-600 mt-1">
           Defina protocolos por empresa y configure montos por examen segun tipo de evaluacion.
         </p>
+        {context === "protocolos" ? (
+          <p className="text-xs text-amber-700 mt-1">Contexto desde Empresa: edición de protocolos por empresa.</p>
+        ) : null}
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">

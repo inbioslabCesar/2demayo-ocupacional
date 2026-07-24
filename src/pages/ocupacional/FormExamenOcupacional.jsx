@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { actualizarExamenOcupacional, crearExamenOcupacional } from "../../api/ocupacionalApi";
+import {
+  actualizarExamenOcupacional,
+  crearExamenOcupacional,
+  guardarGrupoMaestroExamenOcupacional,
+  listarCatalogoGruposExamenOcupacional,
+} from "../../api/ocupacionalApi";
 
 const initialForm = {
   codigo: "",
   descripcion: "",
+  grupo_id: "",
+  subgrupo_id: "",
   grupo: "",
   subgrupo: "",
   valores_normales: "",
@@ -42,16 +49,74 @@ function validateForm(form) {
 
 export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
   const [form, setForm] = useState(initialForm);
+  const [catalogoModo, setCatalogoModo] = useState("legacy_texto");
+  const [catalogoGrupos, setCatalogoGrupos] = useState([]);
+  const [catalogoSubgrupos, setCatalogoSubgrupos] = useState({});
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState("");
   const [serverMessage, setServerMessage] = useState("");
+
+  const aplicarCatalogo = (data) => {
+    const modo = String(data?.modo || "legacy_texto");
+    setCatalogoModo(modo);
+
+    if (modo === "maestro") {
+      const grupos = Array.isArray(data?.grupos) ? data.grupos : [];
+      const subMap = data?.subgrupos_por_grupo && typeof data.subgrupos_por_grupo === "object" ? data.subgrupos_por_grupo : {};
+      setCatalogoGrupos(grupos);
+      setCatalogoSubgrupos(subMap);
+      return;
+    }
+
+    const gruposTexto = Array.isArray(data?.grupos) ? data.grupos : [];
+    const subMapTexto = data?.subgrupos_por_grupo && typeof data.subgrupos_por_grupo === "object" ? data.subgrupos_por_grupo : {};
+
+    const gruposCompat = gruposTexto.map((nombre, idx) => ({ id: idx + 1, nombre: String(nombre || "") })).filter((g) => g.nombre !== "");
+    const subCompat = {};
+    gruposCompat.forEach((g) => {
+      const subs = Array.isArray(subMapTexto[g.nombre]) ? subMapTexto[g.nombre] : [];
+      subCompat[String(g.id)] = subs.map((s, idx) => ({ id: idx + 1, nombre: String(s || "") })).filter((s) => s.nombre !== "");
+    });
+
+    setCatalogoGrupos(gruposCompat);
+    setCatalogoSubgrupos(subCompat);
+  };
+
+  const loadCatalogo = async () => {
+    const data = await listarCatalogoGruposExamenOcupacional();
+    aplicarCatalogo(data || {});
+  };
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function bootCatalogo() {
+      try {
+        const data = await listarCatalogoGruposExamenOcupacional();
+        if (canceled) return;
+        aplicarCatalogo(data || {});
+      } catch {
+        if (canceled) return;
+        setCatalogoModo("legacy_texto");
+        setCatalogoGrupos([]);
+        setCatalogoSubgrupos({});
+      }
+    }
+
+    bootCatalogo();
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (editing && typeof editing === "object") {
       setForm({
         codigo: String(editing.codigo || ""),
         descripcion: String(editing.descripcion || ""),
+        grupo_id: "",
+        subgrupo_id: "",
         grupo: String(editing.grupo || ""),
         subgrupo: String(editing.subgrupo || ""),
         valores_normales: String(editing.valores_normales || ""),
@@ -71,7 +136,98 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
 
   const isEditing = Boolean(editing && editing.id);
 
+  useEffect(() => {
+    const grupoNombre = String(form.grupo || "").trim();
+    if (!grupoNombre || catalogoGrupos.length === 0) return;
+
+    const grupoFound = catalogoGrupos.find((g) => String(g.nombre || "").toUpperCase() === grupoNombre.toUpperCase());
+    if (!grupoFound) return;
+
+    if (String(form.grupo_id || "") !== String(grupoFound.id)) {
+      setForm((prev) => ({ ...prev, grupo_id: String(grupoFound.id) }));
+    }
+
+    const subNombre = String(form.subgrupo || "").trim();
+    if (!subNombre) return;
+    const subs = Array.isArray(catalogoSubgrupos[String(grupoFound.id)]) ? catalogoSubgrupos[String(grupoFound.id)] : [];
+    const subFound = subs.find((s) => String(s.nombre || "").toUpperCase() === subNombre.toUpperCase());
+    if (subFound && String(form.subgrupo_id || "") !== String(subFound.id)) {
+      setForm((prev) => ({ ...prev, subgrupo_id: String(subFound.id) }));
+    }
+  }, [catalogoGrupos, catalogoSubgrupos, form.grupo, form.subgrupo, form.grupo_id, form.subgrupo_id]);
+
   const isValid = useMemo(() => Object.keys(validateForm(form)).length === 0, [form]);
+
+  const subgruposSugeridos = useMemo(() => {
+    const grupoId = String(form.grupo_id || "").trim();
+    if (!grupoId) return [];
+    const subs = catalogoSubgrupos[grupoId];
+    return Array.isArray(subs) ? subs : [];
+  }, [form.grupo_id, catalogoSubgrupos]);
+
+  const onChangeGrupo = (event) => {
+    const grupoId = String(event.target.value || "");
+    const grupoObj = catalogoGrupos.find((g) => String(g.id) === grupoId);
+    setForm((prev) => ({
+      ...prev,
+      grupo_id: grupoId,
+      grupo: grupoObj ? String(grupoObj.nombre || "") : "",
+      subgrupo_id: "",
+      subgrupo: "",
+    }));
+    setServerError("");
+    setServerMessage("");
+  };
+
+  const onChangeSubgrupo = (event) => {
+    const subId = String(event.target.value || "");
+    const subObj = subgruposSugeridos.find((s) => String(s.id) === subId);
+    setForm((prev) => ({
+      ...prev,
+      subgrupo_id: subId,
+      subgrupo: subObj ? String(subObj.nombre || "") : "",
+    }));
+    setServerError("");
+    setServerMessage("");
+  };
+
+  const onNuevoGrupo = async () => {
+    if (catalogoModo !== "maestro") {
+      setServerError("Para crear grupos en maestro primero ejecute la migracion 20260724_0011.");
+      return;
+    }
+    const nombre = window.prompt("Nombre del nuevo grupo:", "");
+    if (!nombre || !nombre.trim()) return;
+    try {
+      await guardarGrupoMaestroExamenOcupacional({ nivel: "grupo", nombre: nombre.trim() });
+      await loadCatalogo();
+      setServerMessage("Grupo registrado correctamente.");
+    } catch (error) {
+      setServerError(error.message || "No se pudo crear el grupo");
+    }
+  };
+
+  const onNuevoSubgrupo = async () => {
+    if (catalogoModo !== "maestro") {
+      setServerError("Para crear subgrupos en maestro primero ejecute la migracion 20260724_0011.");
+      return;
+    }
+    const grupoId = Number(form.grupo_id || 0);
+    if (grupoId <= 0) {
+      setServerError("Seleccione primero un grupo para registrar subgrupo.");
+      return;
+    }
+    const nombre = window.prompt("Nombre del nuevo subgrupo:", "");
+    if (!nombre || !nombre.trim()) return;
+    try {
+      const created = await guardarGrupoMaestroExamenOcupacional({ nivel: "subgrupo", nombre: nombre.trim(), parentId: grupoId });
+      await loadCatalogo();
+      setForm((prev) => ({ ...prev, subgrupo_id: String(created.id || ""), subgrupo: String(created.nombre || "") }));
+      setServerMessage("Subgrupo registrado correctamente.");
+    } catch (error) {
+      setServerError(error.message || "No se pudo crear el subgrupo");
+    }
+  };
 
   const onChange = (field) => (event) => {
     const value = event.target.value;
@@ -96,6 +252,8 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
     const payload = {
       codigo: String(form.codigo || "").trim().toUpperCase(),
       descripcion: String(form.descripcion || "").trim(),
+      grupo_id: Number(form.grupo_id || 0),
+      subgrupo_id: Number(form.subgrupo_id || 0),
       grupo: String(form.grupo || "").trim(),
       subgrupo: String(form.subgrupo || "").trim(),
       valores_normales: String(form.valores_normales || "").trim(),
@@ -162,24 +320,56 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
 
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Grupo</label>
-          <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
-            value={form.grupo}
-            onChange={onChange("grupo")}
-            placeholder="MEDICINA"
-            maxLength={100}
-          />
+          <div className="flex gap-2">
+            <select
+              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+              value={form.grupo_id}
+              onChange={onChangeGrupo}
+            >
+              <option value="">SELECCIONAR</option>
+              {catalogoGrupos.map((g) => (
+                <option key={g.id} value={g.id}>{g.nombre}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={onNuevoGrupo}
+            >
+              Nuevo
+            </button>
+          </div>
+          {form.grupo && !form.grupo_id ? (
+            <p className="mt-1 text-xs text-amber-700">Grupo actual no mapeado en maestro: {form.grupo}</p>
+          ) : null}
         </div>
 
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Subgrupo</label>
-          <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
-            value={form.subgrupo}
-            onChange={onChange("subgrupo")}
-            placeholder="EVALUACION"
-            maxLength={100}
-          />
+          <div className="flex gap-2">
+            <select
+              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+              value={form.subgrupo_id}
+              onChange={onChangeSubgrupo}
+              disabled={!form.grupo_id}
+            >
+              <option value="">SELECCIONAR</option>
+              {subgruposSugeridos.map((s) => (
+                <option key={s.id} value={s.id}>{s.nombre}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              onClick={onNuevoSubgrupo}
+              disabled={!form.grupo_id}
+            >
+              Nuevo
+            </button>
+          </div>
+          {form.subgrupo && !form.subgrupo_id ? (
+            <p className="mt-1 text-xs text-amber-700">Subgrupo actual no mapeado en maestro: {form.subgrupo}</p>
+          ) : null}
         </div>
 
         <div>

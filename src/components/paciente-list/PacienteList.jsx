@@ -90,8 +90,28 @@ function PacienteList() {
         tipo_seguro: "",
         sexo: "M",
         direccion: "",
+        lugarnacimiento: "",
+        calle: "",
+        urbanizacion: "",
+        ocupacion: "",
+        hijos: "",
+        hijosdependientes: "",
+        departamento: "",
+        provincia: "",
+        distrito: "",
+        gradoinstruccion: "",
+        estadocivil: "",
+        nombrepadre: "",
+        nombremadre: "",
+        acompanante: "",
+        trabajoresidencia: "",
+        tiemporesidencia: "",
         telefono: "",
+        celular: "",
         email: "",
+        firma_digital: "",
+        huella_digital: "",
+        fotografia: "",
       });
       setModalOpen(true);
       // Limpiar el state para evitar re-apertura en navegación futura
@@ -125,26 +145,57 @@ function PacienteList() {
       tipo_seguro: "",
       sexo: "M",
       direccion: "",
+      lugarnacimiento: "",
+      calle: "",
+      urbanizacion: "",
+      ocupacion: "",
+      hijos: "",
+      hijosdependientes: "",
+      departamento: "",
+      provincia: "",
+      distrito: "",
+      gradoinstruccion: "",
+      estadocivil: "",
+      nombrepadre: "",
+      nombremadre: "",
+      acompanante: "",
+      trabajoresidencia: "",
+      tiemporesidencia: "",
       telefono: "",
+      celular: "",
       email: "",
+      firma_digital: "",
+      huella_digital: "",
+      fotografia: "",
     });
     setModalOpen(true);
   };
-  const handleEditar = useCallback((paciente) => {
-    setEditData({ ...paciente });
+  const handleEditar = useCallback(async (paciente) => {
+    try {
+      const res = await authFetch(`api_pacientes.php?id=${Number(paciente.id)}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (data?.success && data?.paciente) {
+        setEditData({ ...data.paciente });
+      } else {
+        setEditData({ ...paciente });
+      }
+    } catch {
+      setEditData({ ...paciente });
+    }
     setModalOpen(true);
   }, []);
   const handleRegistroExitoso = useCallback(() => {
     setModalOpen(false);
     setEditData(null);
     recargarPacientes(); // Recarga los datos desde el backend tras editar/crear
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recargarPacientes]);
 
   const handleEliminar = useCallback(async (paciente) => {
     await eliminarPaciente(paciente);
     recargarPacientes(); // Recarga los datos desde el backend tras eliminar
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eliminarPaciente, recargarPacientes]);
   const handleDescargarCaratula = useCallback(async (paciente) => {
     try {
@@ -173,10 +224,9 @@ function PacienteList() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(objUrl);
-    } catch (err) {
+    } catch {
       Swal.fire({ icon: 'error', title: 'Error', text: 'No se pudo descargar la carátula.' });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Exportar a Excel

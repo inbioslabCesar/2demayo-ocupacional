@@ -38,6 +38,22 @@ function ensure_medicos_profesional_columns($conn) {
     }
 }
 
+function ensure_medicos_legacy_columns($conn) {
+    $checks = [
+        'dni' => "ALTER TABLE medicos ADD COLUMN dni VARCHAR(20) NULL",
+        'direccion' => "ALTER TABLE medicos ADD COLUMN direccion VARCHAR(255) NULL",
+        'telefono' => "ALTER TABLE medicos ADD COLUMN telefono VARCHAR(30) NULL",
+        'celular' => "ALTER TABLE medicos ADD COLUMN celular VARCHAR(30) NULL",
+    ];
+
+    foreach ($checks as $col => $sqlAlter) {
+        $exists = $conn->query("SHOW COLUMNS FROM medicos LIKE '{$col}'");
+        if ($exists && $exists->num_rows === 0) {
+            $conn->query($sqlAlter);
+        }
+    }
+}
+
 function normalizar_tipo_profesional($tipoRaw) {
     $tipo = strtolower(trim((string)$tipoRaw));
     $allowed = ['medico', 'psicologo', 'obstetra', 'odontologo', 'nutricionista', 'enfermeria', 'otro'];
@@ -130,6 +146,7 @@ function upsert_condiciones_pago($conn, $medicoId, $condiciones) {
 
 ensure_medico_condiciones_table($conn);
 ensure_medicos_profesional_columns($conn);
+ensure_medicos_legacy_columns($conn);
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -179,6 +196,10 @@ switch ($method) {
         $abreviatura_profesional = trim((string)($data['abreviatura_profesional'] ?? ''));
         $colegio_sigla = strtoupper(trim((string)($data['colegio_sigla'] ?? '')));
         $nro_colegiatura = trim((string)($data['nro_colegiatura'] ?? ''));
+        $dni = trim((string)($data['dni'] ?? ''));
+        $direccion = trim((string)($data['direccion'] ?? ''));
+        $telefono = trim((string)($data['telefono'] ?? ''));
+        $celular = trim((string)($data['celular'] ?? ''));
 
         if ($cmp === null) $cmp = '';
         $cmp = trim((string)$cmp);
@@ -193,6 +214,16 @@ switch ($method) {
         
         if (!$nombre || !$apellido || !$especialidad || !$email || !$password) {
             echo json_encode(['success' => false, 'error' => 'Nombre, apellido, especialidad, email y contraseña son requeridos']);
+            exit;
+        }
+
+        if ($direccion === '') {
+            echo json_encode(['success' => false, 'error' => 'La dirección es obligatoria']);
+            exit;
+        }
+
+        if (!preg_match('/^\d{8}$/', $dni)) {
+            echo json_encode(['success' => false, 'error' => 'El DNI debe tener exactamente 8 dígitos']);
             exit;
         }
 
@@ -214,6 +245,16 @@ switch ($method) {
 
         if (!empty($nro_colegiatura) && !preg_match('/^[A-Za-z0-9\-]{1,30}$/', $nro_colegiatura)) {
             echo json_encode(['success' => false, 'error' => 'Formato de número de colegiatura inválido']);
+            exit;
+        }
+
+        if (!empty($telefono) && !preg_match('/^[0-9\-\+\s]{6,30}$/', $telefono)) {
+            echo json_encode(['success' => false, 'error' => 'Formato de teléfono inválido']);
+            exit;
+        }
+
+        if (!preg_match('/^[0-9\-\+\s]{6,30}$/', $celular)) {
+            echo json_encode(['success' => false, 'error' => 'Formato de celular inválido']);
             exit;
         }
 
@@ -241,8 +282,8 @@ switch ($method) {
         }
         
         $password_hash = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $conn->prepare('INSERT INTO medicos (nombre, apellido, especialidad, email, password, cmp, rne, firma, tipo_profesional, abreviatura_profesional, colegio_sigla, nro_colegiatura) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        $stmt->bind_param('ssssssssssss', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura);
+        $stmt = $conn->prepare('INSERT INTO medicos (nombre, apellido, especialidad, email, password, cmp, rne, firma, tipo_profesional, abreviatura_profesional, colegio_sigla, nro_colegiatura, dni, direccion, telefono, celular) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->bind_param('ssssssssssssssss', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular);
         $ok = $stmt->execute();
         $newId = $ok ? intval($stmt->insert_id) : null;
         $stmt->close();
@@ -269,6 +310,10 @@ switch ($method) {
         $abreviatura_profesional = trim((string)($data['abreviatura_profesional'] ?? ''));
         $colegio_sigla = strtoupper(trim((string)($data['colegio_sigla'] ?? '')));
         $nro_colegiatura = trim((string)($data['nro_colegiatura'] ?? ''));
+        $dni = trim((string)($data['dni'] ?? ''));
+        $direccion = trim((string)($data['direccion'] ?? ''));
+        $telefono = trim((string)($data['telefono'] ?? ''));
+        $celular = trim((string)($data['celular'] ?? ''));
 
         if ($cmp === null) $cmp = '';
         $cmp = trim((string)$cmp);
@@ -283,6 +328,28 @@ switch ($method) {
         
         if (!$id || !$nombre || !$apellido || !$especialidad || !$email) {
             echo json_encode(['success' => false, 'error' => 'ID, nombre, apellido, especialidad y email son requeridos']);
+            exit;
+        }
+
+        $stmtCurrent = $conn->prepare('SELECT dni, direccion, telefono, celular FROM medicos WHERE id = ? LIMIT 1');
+        $stmtCurrent->bind_param('i', $id);
+        $stmtCurrent->execute();
+        $current = $stmtCurrent->get_result()->fetch_assoc();
+        $stmtCurrent->close();
+
+        if (!$current) {
+            echo json_encode(['success' => false, 'error' => 'Médico no encontrado']);
+            exit;
+        }
+
+        // Compatibilidad hacia atrás: al editar, no forzar campos legacy en médicos ya existentes.
+        if ($dni === '') $dni = (string)($current['dni'] ?? '');
+        if ($direccion === '') $direccion = (string)($current['direccion'] ?? '');
+        if ($telefono === '') $telefono = (string)($current['telefono'] ?? '');
+        if ($celular === '') $celular = (string)($current['celular'] ?? '');
+
+        if ($dni !== '' && !preg_match('/^\d{8}$/', $dni)) {
+            echo json_encode(['success' => false, 'error' => 'El DNI debe tener exactamente 8 dígitos']);
             exit;
         }
 
@@ -304,6 +371,16 @@ switch ($method) {
 
         if (!empty($nro_colegiatura) && !preg_match('/^[A-Za-z0-9\-]{1,30}$/', $nro_colegiatura)) {
             echo json_encode(['success' => false, 'error' => 'Formato de número de colegiatura inválido']);
+            exit;
+        }
+
+        if (!empty($telefono) && !preg_match('/^[0-9\-\+\s]{6,30}$/', $telefono)) {
+            echo json_encode(['success' => false, 'error' => 'Formato de teléfono inválido']);
+            exit;
+        }
+
+        if (!empty($celular) && !preg_match('/^[0-9\-\+\s]{6,30}$/', $celular)) {
+            echo json_encode(['success' => false, 'error' => 'Formato de celular inválido']);
             exit;
         }
 
@@ -332,11 +409,11 @@ switch ($method) {
         
         if (!empty($password)) {
             $password_hash = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, password=?, cmp=?, rne=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=? WHERE id=?');
-            $stmt->bind_param('ssssssssssssi', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $id);
+            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, password=?, cmp=?, rne=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=?, dni=?, direccion=?, telefono=?, celular=? WHERE id=?');
+            $stmt->bind_param('ssssssssssssssssi', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular, $id);
         } else {
-            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, cmp=?, rne=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=? WHERE id=?');
-            $stmt->bind_param('sssssssssssi', $nombre, $apellido, $especialidad, $email, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $id);
+            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, cmp=?, rne=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=?, dni=?, direccion=?, telefono=?, celular=? WHERE id=?');
+            $stmt->bind_param('sssssssssssssssi', $nombre, $apellido, $especialidad, $email, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular, $id);
         }
         $ok = $stmt->execute();
         $stmt->close();

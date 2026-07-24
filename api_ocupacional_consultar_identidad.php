@@ -43,6 +43,17 @@ function requireOcupPermiso($permiso)
     }
 }
 
+function pacienteBioColumnsAvailable($conn)
+{
+        $sql = "SELECT COUNT(*) AS total FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                            AND TABLE_NAME = 'pacientes'
+                            AND COLUMN_NAME IN ('firma_digital', 'huella_digital', 'fotografia')";
+        $res = $conn->query($sql);
+        $row = $res ? $res->fetch_assoc() : ['total' => 0];
+        return (int) ($row['total'] ?? 0) === 3;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     respond(405, ['success' => false, 'error' => 'Metodo no permitido']);
 }
@@ -68,7 +79,13 @@ if (!preg_match('/^[A-Z0-9]{6,15}$/', $documentoNumero)) {
     respond(422, ['success' => false, 'error' => 'Documento invalido. Debe ser alfanumerico de 6 a 15 caracteres']);
 }
 
-$stmt = $mysqli->prepare('SELECT id, nombre, apellido, sexo, fecha_nacimiento, dni FROM pacientes WHERE UPPER(dni) = ? LIMIT 1');
+$hasBioColumns = pacienteBioColumnsAvailable($mysqli);
+
+if ($hasBioColumns) {
+    $stmt = $mysqli->prepare('SELECT id, nombre, apellido, sexo, fecha_nacimiento, dni, firma_digital, huella_digital, fotografia FROM pacientes WHERE UPPER(dni) = ? LIMIT 1');
+} else {
+    $stmt = $mysqli->prepare('SELECT id, nombre, apellido, sexo, fecha_nacimiento, dni FROM pacientes WHERE UPPER(dni) = ? LIMIT 1');
+}
 if (!$stmt) {
     respond(500, ['success' => false, 'error' => 'No se pudo preparar la consulta']);
 }
@@ -94,6 +111,9 @@ respond(200, [
         'sexo' => (string) ($row['sexo'] ?? ''),
         'fecha_nacimiento' => (string) ($row['fecha_nacimiento'] ?? ''),
         'documento_tipo' => $documentoTipo,
-        'documento_numero' => (string) ($row['dni'] ?? $documentoNumero)
+        'documento_numero' => (string) ($row['dni'] ?? $documentoNumero),
+        'tiene_firma_digital' => $hasBioColumns ? (trim((string) ($row['firma_digital'] ?? '')) !== '') : false,
+        'tiene_huella_digital' => $hasBioColumns ? (trim((string) ($row['huella_digital'] ?? '')) !== '') : false,
+        'tiene_fotografia' => $hasBioColumns ? (trim((string) ($row['fotografia'] ?? '')) !== '') : false
     ]
 ]);

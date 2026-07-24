@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  actualizarBiometriaPacienteClinico,
   listarEmpresasOcupacionales,
   registrarTrabajadorOcupacional,
   verificarIdentidadClinica,
@@ -49,6 +50,89 @@ export default function FormTrabajador({ onCreated }) {
   const [saving, setSaving] = useState(false);
   const [serverMessage, setServerMessage] = useState("");
   const [serverError, setServerError] = useState("");
+  const [bioSaving, setBioSaving] = useState(false);
+  const [bioMessage, setBioMessage] = useState("");
+  const [bioError, setBioError] = useState("");
+  const [bioPayload, setBioPayload] = useState({
+    firma_digital: "",
+    huella_digital: "",
+    fotografia: "",
+  });
+
+  const toDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
+      reader.readAsDataURL(file);
+    });
+
+  const onBioFileChange = (field) => async (event) => {
+    const file = event.target.files?.[0];
+    setBioError("");
+    setBioMessage("");
+    if (!file) {
+      setBioPayload((prev) => ({ ...prev, [field]: "" }));
+      return;
+    }
+    if (!/^image\/(png|jpeg|jpg)$/i.test(file.type)) {
+      setBioError("Solo se permiten imagenes PNG o JPG para biometria.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setBioError("Cada archivo biometrico debe pesar maximo 2MB.");
+      event.target.value = "";
+      return;
+    }
+    try {
+      const dataUrl = await toDataUrl(file);
+      setBioPayload((prev) => ({ ...prev, [field]: dataUrl }));
+    } catch (error) {
+      setBioError(error.message || "No se pudo procesar el archivo biometrico.");
+    }
+  };
+
+  const guardarBiometria = async () => {
+    if (!identidad?.id) {
+      setBioError("Primero verifique la identidad.");
+      return;
+    }
+    const hasChanges =
+      !!bioPayload.firma_digital || !!bioPayload.huella_digital || !!bioPayload.fotografia;
+    if (!hasChanges) {
+      setBioError("Seleccione al menos un archivo: firma, huella o fotografia.");
+      return;
+    }
+
+    setBioSaving(true);
+    setBioError("");
+    setBioMessage("");
+    try {
+      const data = await actualizarBiometriaPacienteClinico({
+        patientId: identidad.id,
+        firmaDigital: bioPayload.firma_digital || null,
+        huellaDigital: bioPayload.huella_digital || null,
+        fotografia: bioPayload.fotografia || null,
+      });
+      setIdentidad((prev) =>
+        prev
+          ? {
+              ...prev,
+              tiene_firma_digital: !!data?.tiene_firma_digital,
+              tiene_huella_digital: !!data?.tiene_huella_digital,
+              tiene_fotografia: !!data?.tiene_fotografia,
+            }
+          : prev
+      );
+      setBioPayload({ firma_digital: "", huella_digital: "", fotografia: "" });
+      setBioMessage("Biometria actualizada en el paciente clinico.");
+    } catch (error) {
+      setBioError(error.message || "No se pudo guardar la biometria.");
+    } finally {
+      setBioSaving(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +221,7 @@ export default function FormTrabajador({ onCreated }) {
       setLaborData(initialLaborData);
       setIdentidad(null);
       setDocumentoNumero("");
+      setBioPayload({ firma_digital: "", huella_digital: "", fotografia: "" });
       setErrors({});
       if (typeof onCreated === "function") {
         onCreated();
@@ -209,6 +294,51 @@ export default function FormTrabajador({ onCreated }) {
           <input className="w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-sm" value={identidad?.fecha_nacimiento || ""} readOnly />
         </div>
       </div>
+
+      {identidad?.id ? (
+        <div className="mt-4 rounded-lg border border-cyan-200 bg-cyan-50 p-4">
+          <h3 className="text-sm font-semibold text-cyan-900">Biometria del paciente clinico</h3>
+          <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-cyan-900 md:grid-cols-3">
+            <div className={`rounded-md border px-3 py-2 ${identidad?.tiene_firma_digital ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
+              Firma digital: {identidad?.tiene_firma_digital ? "Registrada" : "Pendiente"}
+            </div>
+            <div className={`rounded-md border px-3 py-2 ${identidad?.tiene_huella_digital ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
+              Huella digital: {identidad?.tiene_huella_digital ? "Registrada" : "Pendiente"}
+            </div>
+            <div className={`rounded-md border px-3 py-2 ${identidad?.tiene_fotografia ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
+              Fotografia: {identidad?.tiene_fotografia ? "Registrada" : "Pendiente"}
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-cyan-900">Cargar firma</label>
+              <input type="file" accept="image/png,image/jpeg" onChange={onBioFileChange("firma_digital")} className="w-full rounded-md border border-cyan-200 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-cyan-900">Cargar huella</label>
+              <input type="file" accept="image/png,image/jpeg" onChange={onBioFileChange("huella_digital")} className="w-full rounded-md border border-cyan-200 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-cyan-900">Cargar fotografia</label>
+              <input type="file" accept="image/png,image/jpeg" onChange={onBioFileChange("fotografia")} className="w-full rounded-md border border-cyan-200 bg-white px-2 py-1 text-xs" />
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={guardarBiometria}
+              disabled={bioSaving || !identidad?.id}
+              className="rounded-md bg-cyan-700 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {bioSaving ? "Guardando biometria..." : "Guardar biometria"}
+            </button>
+            {bioMessage ? <span className="text-xs font-medium text-emerald-700">{bioMessage}</span> : null}
+            {bioError ? <span className="text-xs font-medium text-red-700">{bioError}</span> : null}
+          </div>
+        </div>
+      ) : null}
 
       <form className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2" onSubmit={onSubmit}>
         {errors.identidad ? <p className="md:col-span-2 text-sm text-red-600">{errors.identidad}</p> : null}

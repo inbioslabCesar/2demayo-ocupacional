@@ -8,13 +8,37 @@ async function parseJsonOrThrow(response) {
   let payload = null;
   try {
     payload = await response.json();
-  } catch (error) {
+  } catch {
     payload = null;
   }
 
   if (!response.ok || !payload?.success) {
     const message = payload?.error || `Error HTTP ${response.status}`;
     throw new Error(message);
+  }
+
+  return payload;
+}
+
+function buildApiError(message, status, payload = null) {
+  const err = new Error(message || `Error HTTP ${status}`);
+  err.status = status;
+  err.payload = payload;
+  err.data = payload?.data;
+  return err;
+}
+
+async function parseJsonWithDetails(response) {
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok || !payload?.success) {
+    const message = payload?.error || `Error HTTP ${response.status}`;
+    throw buildApiError(message, response.status, payload);
   }
 
   return payload;
@@ -27,6 +51,32 @@ export async function listarEmpresasOcupacionales({ estado = "activo" } = {}) {
     per_page: "200",
   });
   const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function listarUbigeoDepartamentos() {
+  const response = await fetch(`${BASE_URL}api_ubigeo.php?tipo=departamentos`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function listarUbigeoProvincias(departamentoId) {
+  const params = new URLSearchParams({
+    tipo: "provincias",
+    departamento_id: String(Number(departamentoId || 0)),
+  });
+  const response = await fetch(`${BASE_URL}api_ubigeo.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function listarUbigeoDistritos(provinciaId) {
+  const params = new URLSearchParams({
+    tipo: "distritos",
+    provincia_id: String(Number(provinciaId || 0)),
+  });
+  const response = await fetch(`${BASE_URL}api_ubigeo.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return payload.data || [];
 }
@@ -55,24 +105,111 @@ export async function listarEmpresasOcupacionalesPaginado({
   };
 }
 
-export async function inactivarEmpresaOcupacional(id) {
+export async function prevalidarInactivarEmpresaOcupacional(id) {
   const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ accion: "inactivar", id }),
+    body: JSON.stringify({ accion: "inactivar_seguro", id: Number(id), modo: "prevalidar" }),
   });
-  const payload = await parseJsonOrThrow(response);
-  return payload;
+  const payload = await parseJsonWithDetails(response);
+  return payload.data;
+}
+
+export async function inactivarEmpresaOcupacional(id, { force = false } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "inactivar_seguro",
+      id: Number(id),
+      modo: "aplicar",
+      force: Boolean(force),
+    }),
+  });
+  const payload = await parseJsonWithDetails(response);
+  return payload.data || payload;
 }
 
 export async function crearEmpresaOcupacional(data) {
+  const bodyPayload = {
+    ruc: String(data?.ruc || "").trim(),
+    razon_social: String(data?.razon_social || "").trim(),
+    nombre_comercial: String(data?.nombre_comercial || "").trim(),
+    actividad: String(data?.actividad || "").trim(),
+    direccion: String(data?.direccion || "").trim(),
+    departamento: String(data?.departamento || "").trim(),
+    provincia: String(data?.provincia || "").trim(),
+    distrito: String(data?.distrito || "").trim(),
+    telefono_1: String(data?.telefono_1 || data?.telefono || "").trim(),
+    telefono_2: String(data?.telefono_2 || "").trim(),
+    contacto_1: String(data?.contacto_1 || "").trim(),
+    contacto_2: String(data?.contacto_2 || "").trim(),
+    correo_1: String(data?.correo_1 || data?.correo || "").trim(),
+    correo_2: String(data?.correo_2 || "").trim(),
+    rrhh_usuario: String(data?.rrhh_usuario || "").trim(),
+    rrhh_password: String(data?.rrhh_password || "").trim(),
+    doctor_usuario: String(data?.doctor_usuario || "").trim(),
+    doctor_password: String(data?.doctor_password || "").trim(),
+    formato_principal: String(data?.formato_principal || "").trim(),
+    formato_certificado: String(data?.formato_certificado || "").trim(),
+    observacion: String(data?.observacion || "").trim(),
+  };
+
   const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify(data),
+    body: JSON.stringify(bodyPayload),
   });
   const payload = await parseJsonOrThrow(response);
   return payload.data;
+}
+
+export async function actualizarEmpresaOcupacional(data) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "actualizar",
+      id: Number(data?.id || 0),
+      ruc: String(data?.ruc || "").trim(),
+      razon_social: String(data?.razon_social || "").trim(),
+      nombre_comercial: String(data?.nombre_comercial || "").trim(),
+      actividad: String(data?.actividad || "").trim(),
+      direccion: String(data?.direccion || "").trim(),
+      departamento: String(data?.departamento || "").trim(),
+      provincia: String(data?.provincia || "").trim(),
+      distrito: String(data?.distrito || "").trim(),
+      telefono_1: String(data?.telefono_1 || data?.telefono || "").trim(),
+      telefono_2: String(data?.telefono_2 || "").trim(),
+      contacto_1: String(data?.contacto_1 || "").trim(),
+      contacto_2: String(data?.contacto_2 || "").trim(),
+      correo_1: String(data?.correo_1 || data?.correo || "").trim(),
+      correo_2: String(data?.correo_2 || "").trim(),
+      rrhh_usuario: String(data?.rrhh_usuario || "").trim(),
+      rrhh_password: String(data?.rrhh_password || "").trim(),
+      doctor_usuario: String(data?.doctor_usuario || "").trim(),
+      doctor_password: String(data?.doctor_password || "").trim(),
+      formato_principal: String(data?.formato_principal || "").trim(),
+      formato_certificado: String(data?.formato_certificado || "").trim(),
+      observacion: String(data?.observacion || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function reactivarEmpresaOcupacional(id) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "reactivar_seguro",
+      id: Number(id),
+      modo: "aplicar",
+    }),
+  });
+  const payload = await parseJsonWithDetails(response);
+  return payload.data || payload;
 }
 
 export async function verificarIdentidadClinica({ documentoTipo, documentoNumero }) {
@@ -91,6 +228,26 @@ export async function registrarTrabajadorOcupacional(data) {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify(data),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function actualizarBiometriaPacienteClinico({
+  patientId,
+  firmaDigital = null,
+  huellaDigital = null,
+  fotografia = null,
+}) {
+  const response = await fetch(`${BASE_URL}api_pacientes_biometria.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      patient_id: Number(patientId || 0),
+      firma_digital: firmaDigital,
+      huella_digital: huellaDigital,
+      fotografia,
+    }),
   });
   const payload = await parseJsonOrThrow(response);
   return payload.data;
@@ -167,6 +324,75 @@ export async function listarExamenesOcupacionalesPaginado({
     data: payload.data || [],
     meta: payload.meta || { page, per_page: perPage, total: 0, total_pages: 0 },
   };
+}
+
+export async function listarCatalogoGruposExamenOcupacional() {
+  const params = new URLSearchParams({ accion: "catalogo_grupos" });
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || { grupos: [], subgrupos_por_grupo: {} };
+}
+
+export async function guardarGrupoMaestroExamenOcupacional({ nivel, nombre, parentId = 0 } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar_grupo_maestro",
+      nivel: String(nivel || "grupo"),
+      nombre: String(nombre || "").trim(),
+      parent_id: Number(parentId || 0),
+    }),
+  });
+  const payload = await parseJsonWithDetails(response);
+  return payload.data;
+}
+
+export async function listarGruposMaestroExamenOcupacional({
+  estado = "activo",
+  q = "",
+  page = 1,
+  perPage = 20,
+} = {}) {
+  const params = new URLSearchParams({
+    accion: "listar_grupos_maestro",
+    estado,
+    q,
+    page: String(page),
+    per_page: String(perPage),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php?${params.toString()}`);
+  const payload = await parseJsonWithDetails(response);
+  return {
+    data: payload.data || [],
+    meta: payload.meta || { page, per_page: perPage, total: 0, total_pages: 0 },
+  };
+}
+
+export async function actualizarGrupoMaestroExamenOcupacional({ id, nivel, nombre, parentId = 0 } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "actualizar_grupo_maestro",
+      id: Number(id || 0),
+      nivel: String(nivel || ""),
+      nombre: String(nombre || "").trim(),
+      parent_id: Number(parentId || 0),
+    }),
+  });
+  const payload = await parseJsonWithDetails(response);
+  return payload.data;
+}
+
+export async function eliminarGrupoMaestroExamenOcupacional(id) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ accion: "eliminar_grupo_maestro", id: Number(id || 0) }),
+  });
+  const payload = await parseJsonWithDetails(response);
+  return payload;
 }
 
 export async function crearExamenOcupacional(data) {
@@ -472,6 +698,13 @@ export async function registrarOrdenOcupacional({
   tipoEvaluacionId,
   fechaOrden,
   observacion,
+  subcontrataEmpresaId = 0,
+  facturarEmpresaId = 0,
+  firmaDoctor = "GALLEGOS",
+  modo = "CONVALIDACION",
+  gestante = false,
+  documento = "",
+  indicaDr = "",
 } = {}) {
   const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
     method: "POST",
@@ -484,6 +717,13 @@ export async function registrarOrdenOcupacional({
       tipo_evaluacion_id: Number(tipoEvaluacionId),
       fecha_orden: String(fechaOrden || "").trim(),
       observacion: String(observacion || "").trim(),
+      subcontrata_empresa_id: Number(subcontrataEmpresaId || 0),
+      facturar_empresa_id: Number(facturarEmpresaId || 0),
+      firma_doctor: String(firmaDoctor || "").trim(),
+      modo: String(modo || "").trim(),
+      gestante: Boolean(gestante),
+      documento: String(documento || "").trim(),
+      indica_dr: String(indicaDr || "").trim(),
     }),
   });
   const payload = await parseJsonOrThrow(response);

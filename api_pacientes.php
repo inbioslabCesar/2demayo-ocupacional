@@ -2,6 +2,13 @@
 require_once __DIR__ . '/init_api.php';
 require_once __DIR__ . '/config.php';
 
+function validar_data_url_imagen(?string $valor): bool {
+    if ($valor === null || trim($valor) === '') {
+        return true;
+    }
+    return preg_match('/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+\/=\r\n]+$/', $valor) === 1;
+}
+
 function construir_filtro_busqueda_pacientes(string $busqueda): array {
     $busqueda = trim($busqueda);
     if ($busqueda === '') {
@@ -40,6 +47,116 @@ function pacientes_table_exists($conn, string $table): bool {
     $ok = $res && $res->num_rows > 0;
     $stmt->close();
     return $ok;
+}
+
+function pacientes_bio_columns_available($conn): bool {
+    $required = ['firma_digital', 'huella_digital', 'fotografia'];
+    $placeholders = implode(',', array_fill(0, count($required), '?'));
+    $types = str_repeat('s', count($required));
+    $sql = 'SELECT COUNT(*) AS total
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = "pacientes"
+              AND COLUMN_NAME IN (' . $placeholders . ')';
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param($types, ...$required);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    $row = $res ? $res->fetch_assoc() : ['total' => 0];
+    $stmt->close();
+    return (int)($row['total'] ?? 0) === count($required);
+}
+
+function pacientes_columns_state($conn, array $columns): array {
+    $state = [];
+    foreach ($columns as $column) {
+        $state[$column] = false;
+    }
+    if (empty($columns)) {
+        return $state;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($columns), '?'));
+    $types = str_repeat('s', count($columns));
+    $sql = 'SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = "pacientes"
+              AND COLUMN_NAME IN (' . $placeholders . ')';
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        return $state;
+    }
+    $stmt->bind_param($types, ...$columns);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    while ($res && ($row = $res->fetch_assoc())) {
+        $col = (string) ($row['COLUMN_NAME'] ?? '');
+        if ($col !== '' && array_key_exists($col, $state)) {
+            $state[$col] = true;
+        }
+    }
+    $stmt->close();
+    return $state;
+}
+
+function bind_dynamic_params($stmt, string $types, array &$params): void {
+    if ($types === '') {
+        return;
+    }
+    $refs = [];
+    $refs[] = &$types;
+    foreach ($params as $k => &$v) {
+        $refs[] = &$params[$k];
+    }
+    call_user_func_array([$stmt, 'bind_param'], $refs);
+}
+
+function obtener_paciente_por_id($conn, int $id, bool $hasBioColumns, array $legacyState): ?array {
+    $columns = [
+        'id',
+        'historia_clinica',
+        'nombre',
+        'apellido',
+        'fecha_nacimiento',
+        'edad',
+        'edad_unidad',
+        'procedencia',
+        'tipo_seguro',
+        'direccion',
+        'telefono',
+        'email',
+        'dni',
+        'sexo',
+    ];
+
+    if ($hasBioColumns) {
+        $columns[] = 'firma_digital';
+        $columns[] = 'huella_digital';
+        $columns[] = 'fotografia';
+    }
+
+    foreach ($legacyState as $column => $exists) {
+        if ($exists) {
+            $columns[] = $column;
+        }
+    }
+
+    $columns[] = 'creado_en';
+    $sql = 'SELECT ' . implode(', ', $columns) . ' FROM pacientes WHERE id = ?';
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        return null;
+    }
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    $row = $res ? $res->fetch_assoc() : null;
+    $stmt->close();
+    return $row ?: null;
 }
 
 // Función para generar el próximo número de historia clínica
@@ -101,6 +218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $data = json_decode(file_get_contents('php://input'), true);
+    $hasBioColumns = pacientes_bio_columns_available($conn);
     
     $id = isset($data['id']) ? intval($data['id']) : 0;
     $dni = $data['dni'] ?? '';
@@ -135,11 +253,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $edad = $data['edad'] ?? null;
     $edad_unidad = $data['edad_unidad'] ?? null;
     $procedencia = $data['procedencia'] ?? null;
-    $tipo_seguro = $data['tipo_seguro'] ?? null;
+    $tipo_seguro = $data['tipo_seguro'] ?? ($data['seguro'] ?? null);
     $sexo = $data['sexo'] ?? 'M';
     $direccion = $data['direccion'] ?? null;
     $telefono = $data['telefono'] ?? null;
     $email = $data['email'] ?? null;
+    $firma_digital = array_key_exists('firma_digital', $data) ? (string) $data['firma_digital'] : null;
+    $huella_digital = array_key_exists('huella_digital', $data) ? (string) $data['huella_digital'] : null;
+    $fotografia = array_key_exists('fotografia', $data) ? (string) $data['fotografia'] : null;
+
+    $legacyColumns = [
+        'tipo_documento',
+        'lugarnacimiento',
+        'calle',
+        'urbanizacion',
+        'ocupacion',
+        'hijos',
+        'hijosdependientes',
+        'departamento',
+        'provincia',
+        'distrito',
+        'gradoinstruccion',
+        'estadocivil',
+        'nombrepadre',
+        'nombremadre',
+        'acompanante',
+        'trabajoresidencia',
+        'tiemporesidencia',
+        'celular',
+    ];
+    $legacyState = pacientes_columns_state($conn, $legacyColumns);
+
+    $residenciaRaw = $data['trabajoresidencia'] ?? $data['residencia'] ?? null;
+    if (is_string($residenciaRaw)) {
+        $resUpper = strtoupper(trim($residenciaRaw));
+        if ($resUpper === 'SI' || $resUpper === '1') {
+            $residenciaRaw = 1;
+        } elseif ($resUpper === 'NO' || $resUpper === '0') {
+            $residenciaRaw = 0;
+        }
+    }
+
+    $legacyValues = [
+        'tipo_documento' => isset($data['tipo_documento']) ? strtolower(trim((string)$data['tipo_documento'])) : null,
+        'lugarnacimiento' => isset($data['lugarnacimiento']) ? trim((string)$data['lugarnacimiento']) : null,
+        'calle' => isset($data['calle']) ? trim((string)$data['calle']) : null,
+        'urbanizacion' => isset($data['urbanizacion']) ? trim((string)$data['urbanizacion']) : null,
+        'ocupacion' => isset($data['ocupacion']) ? trim((string)$data['ocupacion']) : null,
+        'hijos' => ($data['hijos'] ?? '') !== '' ? max(0, (int)$data['hijos']) : null,
+        'hijosdependientes' => ($data['hijosdependientes'] ?? '') !== '' ? max(0, (int)$data['hijosdependientes']) : null,
+        'departamento' => isset($data['departamento']) ? trim((string)$data['departamento']) : null,
+        'provincia' => isset($data['provincia']) ? trim((string)$data['provincia']) : null,
+        'distrito' => isset($data['distrito']) ? trim((string)$data['distrito']) : null,
+        'gradoinstruccion' => isset($data['gradoinstruccion']) ? trim((string)$data['gradoinstruccion']) : null,
+        'estadocivil' => isset($data['estadocivil']) ? trim((string)$data['estadocivil']) : null,
+        'nombrepadre' => isset($data['nombrepadre']) ? trim((string)$data['nombrepadre']) : null,
+        'nombremadre' => isset($data['nombremadre']) ? trim((string)$data['nombremadre']) : null,
+        'acompanante' => isset($data['acompanante']) ? trim((string)$data['acompanante']) : null,
+        'trabajoresidencia' => $residenciaRaw === null || $residenciaRaw === '' ? null : ((int)$residenciaRaw > 0 ? 1 : 0),
+        'tiemporesidencia' => ($data['tiemporesidencia'] ?? '') !== '' ? max(0, (int)$data['tiemporesidencia']) : null,
+        'celular' => isset($data['celular']) ? trim((string)$data['celular']) : null,
+    ];
+
+        if (!validar_data_url_imagen($firma_digital)) {
+            echo json_encode(['success' => false, 'error' => 'Firma digital invalida. Debe ser imagen PNG o JPG en base64.']);
+            exit;
+        }
+        if (!validar_data_url_imagen($huella_digital)) {
+            echo json_encode(['success' => false, 'error' => 'Huella digital invalida. Debe ser imagen PNG o JPG en base64.']);
+            exit;
+        }
+        if (!validar_data_url_imagen($fotografia)) {
+            echo json_encode(['success' => false, 'error' => 'Fotografia invalida. Debe ser imagen PNG o JPG en base64.']);
+            exit;
+        }
 
         // Validar campos obligatorios
         if (!$dni) {
@@ -157,36 +344,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // La historia clínica ya no es obligatoria desde el frontend
         // Se genera automáticamente si está vacía
 
+        $fields = [
+            'dni' => $dni,
+            'nombre' => $nombre,
+            'apellido' => $apellido,
+            'historia_clinica' => $historia,
+            'fecha_nacimiento' => $fecha_nacimiento,
+            'edad' => $edad,
+            'edad_unidad' => $edad_unidad,
+            'procedencia' => $procedencia,
+            'tipo_seguro' => $tipo_seguro,
+            'sexo' => $sexo,
+            'direccion' => $direccion,
+            'telefono' => $telefono,
+            'email' => $email,
+        ];
+
+        if ($hasBioColumns) {
+            $fields['firma_digital'] = $firma_digital;
+            $fields['huella_digital'] = $huella_digital;
+            $fields['fotografia'] = $fotografia;
+        }
+
+        foreach ($legacyValues as $column => $value) {
+            if (!empty($legacyState[$column])) {
+                $fields[$column] = $value;
+            }
+        }
+
         if ($id > 0) {
-            // Actualizar paciente existente
-        $stmt = $conn->prepare("UPDATE pacientes SET dni=?, nombre=?, apellido=?, historia_clinica=?, fecha_nacimiento=?, edad=?, edad_unidad=?, procedencia=?, tipo_seguro=?, sexo=?, direccion=?, telefono=?, email=? WHERE id=?");
-        $stmt->bind_param('sssssssssssssi', $dni, $nombre, $apellido, $historia, $fecha_nacimiento, $edad, $edad_unidad, $procedencia, $tipo_seguro, $sexo, $direccion, $telefono, $email, $id);
+            $sets = [];
+            $params = [];
+            foreach ($fields as $column => $value) {
+                $sets[] = $column . ' = ?';
+                $params[] = $value;
+            }
+            $types = str_repeat('s', count($params)) . 'i';
+            $params[] = $id;
+
+            $sql = 'UPDATE pacientes SET ' . implode(', ', $sets) . ' WHERE id = ?';
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                echo json_encode(['success' => false, 'error' => 'Error al preparar actualización: ' . $conn->error]);
+                exit;
+            }
+            bind_dynamic_params($stmt, $types, $params);
+
             if ($stmt->execute()) {
-                $res = $conn->query("SELECT id, historia_clinica, nombre, apellido, fecha_nacimiento, edad, edad_unidad, procedencia, tipo_seguro, direccion, telefono, email, dni, sexo, creado_en FROM pacientes WHERE id = $id");
-                $paciente = $res->fetch_assoc();
+                $paciente = obtener_paciente_por_id($conn, $id, $hasBioColumns, $legacyState);
                 echo json_encode(['success' => true, 'paciente' => $paciente]);
             } else {
                 echo json_encode(['success' => false, 'error' => 'Error al actualizar paciente: ' . $stmt->error]);
             }
             $stmt->close();
         } else {
-            // Registrar nuevo paciente
-        $stmt = $conn->prepare("INSERT INTO pacientes (dni, nombre, apellido, historia_clinica, fecha_nacimiento, edad, edad_unidad, procedencia, tipo_seguro, sexo, direccion, telefono, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param('sssssssssssss', $dni, $nombre, $apellido, $historia, $fecha_nacimiento, $edad, $edad_unidad, $procedencia, $tipo_seguro, $sexo, $direccion, $telefono, $email);
-        if ($stmt->execute()) {
-            $id = $conn->insert_id;
-            $res = $conn->query("SELECT id, historia_clinica, nombre, apellido, fecha_nacimiento, edad, edad_unidad, procedencia, tipo_seguro, direccion, telefono, email, dni, sexo, creado_en FROM pacientes WHERE id = $id");
-            $paciente = $res->fetch_assoc();
-            echo json_encode(['success' => true, 'paciente' => $paciente]);
-        } else {
-            // Detectar error de DNI duplicado y devolver mensaje en español
-            if (strpos($stmt->error, 'Duplicate entry') !== false && strpos($stmt->error, 'dni') !== false) {
-                echo json_encode(['success' => false, 'error' => 'El DNI ingresado ya está registrado en el sistema.']);
-            } else {
-                echo json_encode(['success' => false, 'error' => 'Error al registrar paciente: ' . $stmt->error]);
+            $columns = array_keys($fields);
+            $params = array_values($fields);
+            $placeholders = implode(', ', array_fill(0, count($columns), '?'));
+            $types = str_repeat('s', count($params));
+
+            $sql = 'INSERT INTO pacientes (' . implode(', ', $columns) . ') VALUES (' . $placeholders . ')';
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                echo json_encode(['success' => false, 'error' => 'Error al preparar registro: ' . $conn->error]);
+                exit;
             }
-        }
-        $stmt->close();
+            bind_dynamic_params($stmt, $types, $params);
+
+            if ($stmt->execute()) {
+                $id = $conn->insert_id;
+                $paciente = obtener_paciente_por_id($conn, $id, $hasBioColumns, $legacyState);
+                echo json_encode(['success' => true, 'paciente' => $paciente]);
+            } else {
+                if (strpos($stmt->error, 'Duplicate entry') !== false && strpos($stmt->error, 'dni') !== false) {
+                    echo json_encode(['success' => false, 'error' => 'El DNI ingresado ya está registrado en el sistema.']);
+                } else {
+                    echo json_encode(['success' => false, 'error' => 'Error al registrar paciente: ' . $stmt->error]);
+                }
+            }
+            $stmt->close();
         }
         exit;
 }
@@ -196,11 +432,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Listar un paciente por id (GET ?id=...)
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['id'])) {
     $id = intval($_GET['id']);
-    $stmt = $conn->prepare("SELECT id, historia_clinica, nombre, apellido, fecha_nacimiento, edad, edad_unidad, procedencia, tipo_seguro, direccion, telefono, email, dni, sexo, creado_en FROM pacientes WHERE id = ?");
-    $stmt->bind_param('i', $id);
-    $stmt->execute();
-    $res = $stmt->get_result();
-    $row = $res->fetch_assoc();
+    $hasBioColumns = pacientes_bio_columns_available($conn);
+    $legacyState = pacientes_columns_state($conn, [
+        'tipo_documento',
+        'lugarnacimiento',
+        'calle',
+        'urbanizacion',
+        'ocupacion',
+        'hijos',
+        'hijosdependientes',
+        'departamento',
+        'provincia',
+        'distrito',
+        'gradoinstruccion',
+        'estadocivil',
+        'nombrepadre',
+        'nombremadre',
+        'acompanante',
+        'trabajoresidencia',
+        'tiemporesidencia',
+        'celular',
+    ]);
+    $row = obtener_paciente_por_id($conn, $id, $hasBioColumns, $legacyState);
     if ($row) {
         // Calcular edad si no está
         if (empty($row['edad']) && !empty($row['fecha_nacimiento'])) {
@@ -213,7 +466,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['id'])) {
     } else {
         echo json_encode(['success' => false, 'error' => 'Paciente no encontrado']);
     }
-    $stmt->close();
     exit;
 }
 

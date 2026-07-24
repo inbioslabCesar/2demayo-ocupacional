@@ -4,9 +4,13 @@ import Swal from 'sweetalert2';
 import { BASE_URL } from '../config/config';
 
 const EMPTY_MEDICO_FORM = {
+  dni: '',
   nombre: '',
   apellido: '',
   especialidad: '',
+  direccion: '',
+  telefono: '',
+  celular: '',
   tipo_profesional: 'medico',
   abreviatura_profesional: 'Dr(a).',
   colegio_sigla: 'CMP',
@@ -234,9 +238,13 @@ const useMedicos = () => {
     setEditModal(true);
     setEditForm({
       id: medico.id,
+      dni: medico.dni || '',
       nombre: medico.nombre || '',
       apellido: medico.apellido || '',
       especialidad: medico.especialidad || '',
+      direccion: medico.direccion || '',
+      telefono: medico.telefono || '',
+      celular: medico.celular || '',
       tipo_profesional: medico.tipo_profesional || 'medico',
       abreviatura_profesional: medico.abreviatura_profesional || 'Dr(a).',
       colegio_sigla: medico.colegio_sigla || 'CMP',
@@ -288,10 +296,17 @@ const useMedicos = () => {
     if (!busqueda) return true;
     const searchTerm = busqueda.toLowerCase();
     return (
+      String(medico.dni || '').toLowerCase().includes(searchTerm) ||
       String(medico.nombre || '').toLowerCase().includes(searchTerm) ||
       String(medico.apellido || '').toLowerCase().includes(searchTerm) ||
       String(medico.especialidad || '').toLowerCase().includes(searchTerm) ||
-      String(medico.email || '').toLowerCase().includes(searchTerm)
+      String(medico.email || '').toLowerCase().includes(searchTerm) ||
+      String(medico.cmp || '').toLowerCase().includes(searchTerm) ||
+      String(medico.rne || '').toLowerCase().includes(searchTerm) ||
+      String(medico.nro_colegiatura || '').toLowerCase().includes(searchTerm) ||
+      String(medico.celular || '').toLowerCase().includes(searchTerm) ||
+      String(medico.telefono || '').toLowerCase().includes(searchTerm) ||
+      String(medico.direccion || '').toLowerCase().includes(searchTerm)
     );
   });
 

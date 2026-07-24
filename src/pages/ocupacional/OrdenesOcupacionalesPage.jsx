@@ -25,6 +25,127 @@ import {
   registrarEmisionCertificadoOrdenOcupacional,
   registrarOrdenOcupacional,
 } from "../../api/ocupacionalApi";
+import { BASE_URL } from "../../config/config";
+import { formatColegiatura, formatProfesionalName } from "../../utils/profesionalDisplay";
+
+function resolveAssetUrl(rawValue) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) return "";
+  if (/^(https?:\/\/|data:|blob:)/i.test(raw)) return raw;
+  return `${BASE_URL}${raw.replace(/^\/+/, "")}`;
+}
+
+function inferDataUrlImageFormat(dataUrl) {
+  if (/^data:image\/png/i.test(String(dataUrl || ""))) return "PNG";
+  if (/^data:image\/jpe?g/i.test(String(dataUrl || ""))) return "JPEG";
+  return "PNG";
+}
+
+async function loadImageAsDataUrl(imageUrl) {
+  if (!imageUrl) return "";
+  if (/^data:image\//i.test(String(imageUrl))) {
+    return String(imageUrl);
+  }
+  const response = await fetch(imageUrl, { credentials: "include" });
+  if (!response.ok) return "";
+  const blob = await response.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("No se pudo leer imagen"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function fetchConfiguracionClinica() {
+  const response = await fetch(`${BASE_URL}api_get_configuracion.php`, {
+    method: "GET",
+    credentials: "include",
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || !payload?.success) {
+    return null;
+  }
+  return payload.data || null;
+}
+
+async function fetchMedicosCrud() {
+  const response = await fetch(`${BASE_URL}api_medicos.php`, {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || !payload?.success) return [];
+  return Array.isArray(payload.medicos) ? payload.medicos : [];
+}
+
+function normalizeCompareText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function buildMedicoToken(medico) {
+  const apellido = String(medico?.apellido || "").trim().toUpperCase();
+  if (apellido) return apellido;
+  const nombreCompleto = [medico?.nombre, medico?.apellido].filter(Boolean).join(" ").trim().toUpperCase();
+  return nombreCompleto || "MEDICO";
+}
+
+function resolveMedicoFromOrden(det, medicos = []) {
+  const lista = Array.isArray(medicos) ? medicos : [];
+  if (!lista.length) return null;
+
+  const firmas = [det?.medico_responsable, det?.firma_doctor]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+
+  for (const raw of firmas) {
+    if (/^\d+$/.test(raw)) {
+      const byId = lista.find((m) => Number(m.id) === Number(raw));
+      if (byId) return byId;
+    }
+  }
+
+  const normalizedTokens = firmas.map((v) => normalizeCompareText(v)).filter(Boolean);
+  if (!normalizedTokens.length) return null;
+
+  const matches = lista.filter((m) => {
+      const full = normalizeCompareText(`${m?.nombre || ""} ${m?.apellido || ""}`);
+      const apellido = normalizeCompareText(m?.apellido || "");
+      const token = normalizeCompareText(buildMedicoToken(m));
+      return normalizedTokens.some((needle) => {
+        if (!needle) return false;
+        return (
+          full === needle
+          || apellido === needle
+          || token === needle
+          || full.includes(needle)
+          || needle.includes(apellido)
+        );
+      });
+    });
+
+  if (!matches.length) return null;
+
+  const withFirma = matches.find((m) => String(m?.firma || "").trim() !== "");
+  return withFirma || matches[0];
+}
 
 function todayIso() {
   const now = new Date();
@@ -62,6 +183,15 @@ export default function OrdenesOcupacionalesPage() {
 
   const [fechaOrden, setFechaOrden] = useState(todayIso());
   const [observacion, setObservacion] = useState("");
+  const [subcontrataEmpresaId, setSubcontrataEmpresaId] = useState(0);
+  const [facturarEmpresaId, setFacturarEmpresaId] = useState(0);
+  const [firmaDoctor, setFirmaDoctor] = useState("GALLEGOS");
+  const [medicosCrud, setMedicosCrud] = useState([]);
+  const [medicoOrdenId, setMedicoOrdenId] = useState(0);
+  const [modoOrden, setModoOrden] = useState("CONVALIDACION");
+  const [gestanteOrden, setGestanteOrden] = useState(false);
+  const [documentoOrden, setDocumentoOrden] = useState("");
+  const [indicaDr, setIndicaDr] = useState("");
 
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -137,6 +267,10 @@ export default function OrdenesOcupacionalesPage() {
   });
   const ordenesRequestRef = useRef(0);
   const resumenRequestRef = useRef(0);
+  const medicoOrden = useMemo(
+    () => (medicosCrud || []).find((m) => Number(m.id) === Number(medicoOrdenId)) || null,
+    [medicosCrud, medicoOrdenId]
+  );
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -151,9 +285,10 @@ export default function OrdenesOcupacionalesPage() {
 
     async function boot() {
       try {
-        const [empData, tipoData] = await Promise.all([
+        const [empData, tipoData, medicosData] = await Promise.all([
           listarEmpresasOcupacionales({ estado: "activo" }),
           listarTiposEvaluacionOcupacional(),
+          fetchMedicosCrud(),
         ]);
 
         if (cancelled) return;
@@ -167,6 +302,14 @@ export default function OrdenesOcupacionalesPage() {
         if (!tipoEvaluacionId && (tipoData || []).length > 0) {
           setTipoEvaluacionId(Number(tipoData[0].id));
         }
+
+        const medicosActivos = (medicosData || []).filter(
+          (m) => String(m?.estado || "activo").toLowerCase() !== "inactivo"
+        );
+        setMedicosCrud(medicosActivos);
+        if (!medicoOrdenId && medicosActivos.length > 0) {
+          setMedicoOrdenId(Number(medicosActivos[0].id));
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err.message || "No se pudo cargar catalogos iniciales");
@@ -178,7 +321,12 @@ export default function OrdenesOcupacionalesPage() {
     return () => {
       cancelled = true;
     };
-  }, [empresaId, tipoEvaluacionId]);
+  }, [empresaId, medicoOrdenId, tipoEvaluacionId]);
+
+  useEffect(() => {
+    if (!medicoOrden) return;
+    setFirmaDoctor(buildMedicoToken(medicoOrden));
+  }, [medicoOrden]);
 
   const cargarTrabajadores = useCallback(async () => {
     if (!empresaId) {
@@ -335,6 +483,7 @@ export default function OrdenesOcupacionalesPage() {
     setError("");
     setMessage("");
     try {
+      const firmaDoctorPayload = medicoOrden ? buildMedicoToken(medicoOrden) : String(firmaDoctor || "").trim();
       const data = await registrarOrdenOcupacional({
         empresaId,
         trabajadorId,
@@ -342,10 +491,19 @@ export default function OrdenesOcupacionalesPage() {
         tipoEvaluacionId,
         fechaOrden,
         observacion,
+        subcontrataEmpresaId,
+        facturarEmpresaId,
+        firmaDoctor: firmaDoctorPayload,
+        modo: modoOrden,
+        gestante: gestanteOrden,
+        documento: documentoOrden,
+        indicaDr,
       });
 
       setMessage(`Orden registrada: ${data.codigo} (${data.total_items} examenes)`);
       setObservacion("");
+      setDocumentoOrden("");
+      setIndicaDr("");
       await recargarListadoYResumen();
     } catch (err) {
       setError(err.message || "No se pudo registrar la orden");
@@ -844,6 +1002,7 @@ export default function OrdenesOcupacionalesPage() {
         medicoResponsable: aptitudForm.medico,
       });
       await recargarDetalleModal(detalleModalData.id);
+      await recargarListadoYResumen();
       setMessage(`Aptitud final guardada: ${aptitudForm.aptitud}`);
     } catch (err) {
       setDetalleModalError(err.message || "No se pudo guardar aptitud final");
@@ -865,28 +1024,172 @@ export default function OrdenesOcupacionalesPage() {
         throw new Error("Debe registrar aptitud final antes de emitir certificado");
       }
 
-      const jsPDF = (await import("jspdf")).default;
-      const doc = new jsPDF();
+      const [jsPDFModule, autoTableModule, configuracionClinica] = await Promise.all([
+        import("jspdf"),
+        import("jspdf-autotable"),
+        fetchConfiguracionClinica(),
+      ]);
+      const jsPDF = jsPDFModule.default;
+      const autoTable = autoTableModule.default;
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+
+      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_url || "");
+      const medicoOrdenCrud = resolveMedicoFromOrden(det, medicosCrud);
+      const firmaOrden = String(medicoOrdenCrud?.firma || det.firma_doctor || "").trim();
+      const firmaRaw = firmaOrden;
+      const firmaUrl = /^(data:|https?:\/\/|blob:|uploads\/|\/uploads\/)/i.test(firmaRaw)
+        ? resolveAssetUrl(firmaRaw)
+        : "";
+
+      const [logoDataUrl, firmaDataUrl] = await Promise.all([
+        logoUrl ? loadImageAsDataUrl(logoUrl).catch(() => "") : Promise.resolve(""),
+        firmaUrl ? loadImageAsDataUrl(firmaUrl).catch(() => "") : Promise.resolve(""),
+      ]);
+
+      const fechaEmision = new Date();
+      const fechaEmisionTexto = fechaEmision.toLocaleString("es-PE", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.6);
+      doc.rect(8, 8, 194, 281);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(54);
+      doc.setTextColor(235, 238, 242);
+      doc.text("OCUPACIONAL", 105, 165, { align: "center", angle: 35 });
+      doc.setTextColor(17, 24, 39);
+
+      if (logoDataUrl) {
+        const logoType = inferDataUrlImageFormat(logoDataUrl);
+        doc.addImage(logoDataUrl, logoType, 12, 12, 24, 24);
+      }
+
+      doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
-      doc.text("CERTIFICADO DE APTITUD OCUPACIONAL", 105, 20, { align: "center" });
-      doc.setFontSize(11);
-      doc.text(`Orden: ${det.codigo}`, 14, 34);
-      doc.text(`Fecha: ${det.fecha_orden}`, 14, 41);
-      doc.text(`Empresa: ${det.empresa}`, 14, 48);
-      doc.text(`Documento: ${det.documento_numero}`, 14, 55);
-      doc.text(`Puesto: ${det.puesto_trabajo}`, 14, 62);
-      doc.text(`Protocolo: ${det.protocolo_descripcion}`, 14, 69);
-      doc.text(`Tipo evaluacion: ${det.tipo_codigo} - ${det.tipo_nombre}`, 14, 76);
+      doc.text(String(configuracionClinica?.nombre_clinica || "CLINICA 2 DE MAYO"), 40, 19);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.text(`RUC: ${String(configuracionClinica?.ruc || "-")}`, 40, 24);
+      doc.text(`Direccion: ${String(configuracionClinica?.direccion || "-")}`, 40, 28);
+      doc.text(`Telefono: ${String(configuracionClinica?.telefono || "-")}`, 40, 32);
 
-      doc.setFontSize(12);
-      doc.text(`APTITUD FINAL: ${det.aptitud_final}`, 14, 92);
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.3);
+      doc.line(12, 38, 198, 38);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(17);
+      doc.text("CERTIFICADO DE APTITUD OCUPACIONAL", 105, 48, { align: "center" });
+      doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
-      doc.text(`Restricciones: ${det.restriccion_final || "Ninguna"}`, 14, 102);
-      doc.text(`Recomendaciones: ${det.recomendacion_final || "Ninguna"}`, 14, 110);
-      doc.text(`Medico responsable: ${det.medico_responsable || "No consignado"}`, 14, 118);
+      doc.text(`Emitido: ${fechaEmisionTexto}`, 198, 54, { align: "right" });
 
-      doc.text("Este certificado se emite en base al cierre formal de la orden ocupacional.", 14, 136);
-      doc.text(`Emitido: ${new Date().toLocaleString()}`, 14, 144);
+      autoTable(doc, {
+        startY: 58,
+        theme: "grid",
+        margin: { left: 12, right: 12 },
+        tableWidth: 186,
+        styles: { fontSize: 9.5, cellPadding: 2.1, textColor: [17, 24, 39], valign: "middle" },
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: "bold" },
+        columnStyles: {
+          0: { cellWidth: 34, fontStyle: "bold" },
+          1: { cellWidth: 59 },
+          2: { cellWidth: 29, fontStyle: "bold" },
+          3: { cellWidth: 64 },
+        },
+        head: [["Datos paciente", "", "Orden", ""]],
+        body: [[
+          "Nombres y apellidos",
+          String(det.paciente_nombre_completo || "-"),
+          "HC",
+          String(det.paciente_historia_clinica || "-"),
+        ], [
+          "Documento",
+          String(det.documento_numero || "-"),
+          "Codigo",
+          String(det.codigo || "-"),
+        ], [
+          "Empresa",
+          String(det.empresa || "-"),
+          "Fecha orden",
+          String(det.fecha_orden || "-"),
+        ], [
+          "Puesto",
+          String(det.puesto_trabajo || "-"),
+          "Tipo eval.",
+          `${String(det.tipo_codigo || "")} ${String(det.tipo_nombre || "")}`.trim() || "-",
+        ], [
+          "Protocolo",
+          String(det.protocolo_descripcion || "-"),
+          "Estado orden",
+          String(det.estado || "-"),
+        ]],
+      });
+
+      const aptitudY = (doc.lastAutoTable?.finalY || 96) + 8;
+      doc.setDrawColor(30, 41, 59);
+      doc.setFillColor(248, 250, 252);
+      doc.rect(12, aptitudY, 186, 34, "FD");
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.text(`APTITUD FINAL: ${String(det.aptitud_final || "-").toUpperCase()}`, 16, aptitudY + 8);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      const restricciones = doc.splitTextToSize(`Restricciones: ${String(det.restriccion_final || "Ninguna")}`, 178);
+      const recomendaciones = doc.splitTextToSize(`Recomendaciones: ${String(det.recomendacion_final || "Ninguna")}`, 178);
+      doc.text(restricciones, 16, aptitudY + 15);
+      doc.text(recomendaciones, 16, aptitudY + 23);
+
+      const declaracionY = aptitudY + 44;
+      const declaracion =
+        "El presente certificado acredita la aptitud ocupacional del trabajador en base a la evaluacion clinica y el cierre formal de la orden ocupacional.";
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.2);
+      doc.text(doc.splitTextToSize(declaracion, 184), 12, declaracionY);
+
+      const bloqueFirmaY = 246;
+      doc.setDrawColor(148, 163, 184);
+      doc.line(124, bloqueFirmaY, 196, bloqueFirmaY);
+
+      if (firmaDataUrl) {
+        const firmaType = inferDataUrlImageFormat(firmaDataUrl);
+        doc.addImage(firmaDataUrl, firmaType, 138, 226, 44, 18);
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("MEDICO RESPONSABLE", 160, bloqueFirmaY + 5, { align: "center" });
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      const medicoFirmaNombre = medicoOrdenCrud
+        ? formatProfesionalName(medicoOrdenCrud)
+        : String(det.medico_responsable || det.firma_doctor || "No consignado");
+      doc.text(medicoFirmaNombre, 160, bloqueFirmaY + 10, { align: "center" });
+      if (medicoOrdenCrud) {
+        doc.setFontSize(8.5);
+        const especialidad = String(medicoOrdenCrud.especialidad || "").trim();
+        if (especialidad) {
+          doc.text(especialidad, 160, bloqueFirmaY + 14, { align: "center" });
+        }
+        doc.text(formatColegiatura(medicoOrdenCrud), 160, bloqueFirmaY + 18, { align: "center" });
+        if (String(medicoOrdenCrud.rne || "").trim()) {
+          doc.text(`RNE: ${String(medicoOrdenCrud.rne || "")}`, 160, bloqueFirmaY + 22, { align: "center" });
+        }
+      }
+
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Codigo de orden: ${String(det.codigo || "-")}`, 12, 279);
+      doc.text("Documento generado por el Sistema Clinica 2 de Mayo", 198, 279, { align: "right" });
+      doc.setTextColor(17, 24, 39);
 
       const safeCode = String(det.codigo || `orden_${ordenId}`).replace(/[^A-Za-z0-9_-]/g, "_");
       doc.save(`certificado_aptitud_${safeCode}.pdf`);
@@ -900,6 +1203,7 @@ export default function OrdenesOcupacionalesPage() {
       if (detalleModalData?.id && Number(detalleModalData.id) === Number(det.id || ordenId)) {
         await recargarDetalleModal(detalleModalData.id);
       }
+      await recargarListadoYResumen();
       setMessage(auditOk ? `Certificado emitido: ${safeCode}` : `Certificado emitido: ${safeCode} (sin auditoria)`);
     } catch (err) {
       setError(err.message || "No se pudo emitir certificado");
@@ -1364,6 +1668,76 @@ export default function OrdenesOcupacionalesPage() {
           />
         </div>
 
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={subcontrataEmpresaId}
+            onChange={(e) => setSubcontrataEmpresaId(Number(e.target.value || 0))}
+          >
+            <option value={0}>Subcontrata (opcional)</option>
+            {empresas.map((e) => (
+              <option key={`sub-${e.id}`} value={e.id}>{e.razon_social}</option>
+            ))}
+          </select>
+
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={facturarEmpresaId}
+            onChange={(e) => setFacturarEmpresaId(Number(e.target.value || 0))}
+          >
+            <option value={0}>Facturar a (opcional)</option>
+            {empresas.map((e) => (
+              <option key={`fac-${e.id}`} value={e.id}>{e.razon_social}</option>
+            ))}
+          </select>
+
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={medicoOrdenId}
+            onChange={(e) => setMedicoOrdenId(Number(e.target.value || 0))}
+          >
+            {medicosCrud.length === 0 ? <option value={0}>Sin medicos</option> : null}
+            {medicosCrud.map((m) => (
+              <option key={m.id} value={m.id}>
+                {formatProfesionalName(m)}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={modoOrden}
+            onChange={(e) => setModoOrden(e.target.value)}
+          >
+            <option value="CONVALIDACION">CONVALIDACION</option>
+            <option value="REVALIDACION">REVALIDACION</option>
+            <option value="REEVALUACION">REEVALUACION</option>
+          </select>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <input
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Documento (opcional)"
+            value={documentoOrden}
+            onChange={(e) => setDocumentoOrden(e.target.value)}
+          />
+          <input
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Ind. Dr. (opcional)"
+            value={indicaDr}
+            onChange={(e) => setIndicaDr(e.target.value)}
+          />
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={gestanteOrden ? "1" : "0"}
+            onChange={(e) => setGestanteOrden(e.target.value === "1")}
+          >
+            <option value="0">Gestante: NO</option>
+            <option value="1">Gestante: SI</option>
+          </select>
+        </div>
+
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -1390,6 +1764,9 @@ export default function OrdenesOcupacionalesPage() {
           <div className="rounded border border-slate-200 p-3">
             <p className="text-xs text-slate-600 mb-2">
               Trabajador: <strong>{preview.trabajador?.documento_numero}</strong> | Protocolo: <strong>{preview.protocolo?.descripcion}</strong> | Tipo: <strong>{preview.tipo_evaluacion?.codigo}</strong>
+            </p>
+            <p className="text-xs text-slate-600 mb-2">
+              Medico: <strong>{medicoOrden ? formatProfesionalName(medicoOrden) : (firmaDoctor || "-")}</strong> | Modo: <strong>{modoOrden || "-"}</strong> | Gestante: <strong>{gestanteOrden ? "SI" : "NO"}</strong>
             </p>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
@@ -1600,8 +1977,9 @@ export default function OrdenesOcupacionalesPage() {
                         className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
                         onClick={() => onDescargarPdf(r.id)}
                         disabled={pdfId === r.id}
+                        title="Descargar hoja de ruta de examenes"
                       >
-                        {pdfId === r.id ? "PDF..." : "PDF"}
+                        {pdfId === r.id ? "Ruta..." : "Hoja ruta"}
                       </button>
                       <button
                         type="button"
@@ -1611,6 +1989,11 @@ export default function OrdenesOcupacionalesPage() {
                       >
                         {certificandoId === r.id ? "Cert..." : "Certificado"}
                       </button>
+                      {r.certificado_emitido ? (
+                        <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-1 text-[10px] font-semibold text-emerald-700" title={r.certificado_emitido_at || "Certificado emitido"}>
+                          ✓ Emit.
+                        </span>
+                      ) : null}
                       <button
                         type="button"
                         className="rounded border border-violet-300 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50 disabled:opacity-50"

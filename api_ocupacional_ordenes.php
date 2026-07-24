@@ -122,6 +122,38 @@ function table_exists_orden($conn, $table)
     return $exists;
 }
 
+function column_exists_orden($conn, $table, $column)
+{
+    $stmt = $conn->prepare('SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1');
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param('ss', $table, $column);
+    $stmt->execute();
+    $exists = (bool)$stmt->get_result()->fetch_row();
+    $stmt->close();
+    return $exists;
+}
+
+function resolve_extra_columns_orden($conn)
+{
+    $cols = [
+        'subcontrata_empresa_id' => false,
+        'facturar_empresa_id' => false,
+        'firma_doctor' => false,
+        'modo' => false,
+        'gestante' => false,
+        'documento' => false,
+        'indica_dr' => false,
+    ];
+
+    foreach ($cols as $name => $_) {
+        $cols[$name] = column_exists_orden($conn, 'ocupacional_ordenes', $name);
+    }
+
+    return $cols;
+}
+
 function normalize_text_orden($value)
 {
     return strtoupper(trim((string)$value));
@@ -283,13 +315,13 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
                                                                                 c.examen_id,
                                                                                 e.codigo,
                                                                                 e.descripcion,
-                                                                                CASE WHEN pd.id IS NOT NULL THEN pd.monto ELSE e.precio END AS monto,
-                                                                                CASE WHEN pd.id IS NOT NULL THEN 1 ELSE 0 END AS tiene_config_protocolo
+                                                                                pd.monto AS monto,
+                                                                                1 AS tiene_config_protocolo
                                                                             FROM ocupacional_catalogo_empresas c
                                                                             INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
-                                                                            LEFT JOIN ocupacional_protocolo_detalle pd ON pd.catalogo_id = c.id
-                                                                                                                                                            AND pd.protocolo_id = ?
-                                                                                                                                                            AND pd.tipo_evaluacion_id = ?
+                                                                            INNER JOIN ocupacional_protocolo_detalle pd ON pd.catalogo_id = c.id
+                                                                                                                                                             AND pd.protocolo_id = ?
+                                                                                                                                                             AND pd.tipo_evaluacion_id = ?
                                                                             WHERE c.empresa_id = ?
                                                                                 AND c.estado = "activo"
                                                                                 AND e.estado = "activo"
@@ -387,13 +419,14 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
             if ($ok && $cond['sexo'] !== '' && $cond['sexo'] !== $sexoPaciente) {
                 $ok = false;
             }
+            // Compatibilidad legacy: edadminimo >= edad y edadmaximo <= edad.
             if ($ok && $cond['edad_min'] !== null) {
-                if ($edadPaciente === null || $edadPaciente < $cond['edad_min']) {
+                if ($edadPaciente === null || $edadPaciente > $cond['edad_min']) {
                     $ok = false;
                 }
             }
             if ($ok && $cond['edad_max'] !== null) {
-                if ($edadPaciente === null || $edadPaciente > $cond['edad_max']) {
+                if ($edadPaciente === null || $edadPaciente < $cond['edad_max']) {
                     $ok = false;
                 }
             }
@@ -448,6 +481,22 @@ foreach ($requiredTables as $table) {
         ]);
     }
 }
+
+$ordenExtraColumns = resolve_extra_columns_orden($mysqliOcup);
+
+$sqlExprSubcontrataIdOrden = !empty($ordenExtraColumns['subcontrata_empresa_id']) ? 'o.subcontrata_empresa_id' : 'NULL';
+$sqlExprFacturarIdOrden = !empty($ordenExtraColumns['facturar_empresa_id']) ? 'o.facturar_empresa_id' : 'NULL';
+$sqlExprFirmaDoctorOrden = !empty($ordenExtraColumns['firma_doctor']) ? 'o.firma_doctor' : 'NULL';
+$sqlExprModoOrden = !empty($ordenExtraColumns['modo']) ? 'o.modo' : 'NULL';
+$sqlExprGestanteOrden = !empty($ordenExtraColumns['gestante']) ? 'o.gestante' : 'NULL';
+$sqlExprDocumentoOrden = !empty($ordenExtraColumns['documento']) ? 'o.documento' : 'NULL';
+$sqlExprIndicaDrOrden = !empty($ordenExtraColumns['indica_dr']) ? 'o.indica_dr' : 'NULL';
+$sqlJoinSubcontrataOrden = !empty($ordenExtraColumns['subcontrata_empresa_id'])
+    ? ' LEFT JOIN empresas_ocupacionales esub ON esub.id = o.subcontrata_empresa_id'
+    : '';
+$sqlJoinFacturarOrden = !empty($ordenExtraColumns['facturar_empresa_id'])
+    ? ' LEFT JOIN empresas_ocupacionales efac ON efac.id = o.facturar_empresa_id'
+    : '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     require_ocup_access_orden();
@@ -586,15 +635,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         o.estado,
                         o.monto_total,
                         o.aptitud_final,
+                        ' . $sqlExprSubcontrataIdOrden . ' AS subcontrata_empresa_id,
+                        ' . $sqlExprFacturarIdOrden . ' AS facturar_empresa_id,
+                        ' . $sqlExprFirmaDoctorOrden . ' AS firma_doctor,
+                        ' . $sqlExprModoOrden . ' AS modo,
+                        ' . $sqlExprGestanteOrden . ' AS gestante,
+                        ' . $sqlExprDocumentoOrden . ' AS documento,
+                        ' . $sqlExprIndicaDrOrden . ' AS indica_dr,
                         e.razon_social,
+                        IFNULL(esub.razon_social, "") AS subcontrata_razon_social,
+                        IFNULL(efac.razon_social, "") AS facturar_razon_social,
                         t.documento_numero,
                         t.puesto_trabajo,
                         p.descripcion AS protocolo_descripcion,
                         te.codigo AS tipo_codigo,
                         COALESCE(d.total_items, 0) AS total_items,
-                        COALESCE(d.total_completados, 0) AS total_completados
+                        COALESCE(d.total_completados, 0) AS total_completados,
+                        COALESCE(ce.total_certificados, 0) AS total_certificados,
+                        ce.ultimo_certificado_at
                     FROM ocupacional_ordenes o
-                    INNER JOIN empresas_ocupacionales e ON e.id = o.empresa_id
+                    INNER JOIN empresas_ocupacionales e ON e.id = o.empresa_id'
+                    . $sqlJoinSubcontrataOrden
+                    . $sqlJoinFacturarOrden
+                    . '
                     INNER JOIN pacientes_ocupacionales t ON t.id = o.trabajador_id
                     INNER JOIN ocupacional_protocolos_empresa p ON p.id = o.protocolo_id
                     INNER JOIN ocupacional_tipos_evaluacion te ON te.id = o.tipo_evaluacion_id
@@ -605,7 +668,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                             SUM(CASE WHEN estado_ejecucion IN ("realizado", "observado") THEN 1 ELSE 0 END) AS total_completados
                         FROM ocupacional_orden_detalle
                         GROUP BY orden_id
-                    ) d ON d.orden_id = o.id'
+                    ) d ON d.orden_id = o.id
+                    LEFT JOIN (
+                        SELECT
+                            orden_id,
+                            COUNT(*) AS total_certificados,
+                            MAX(created_at) AS ultimo_certificado_at
+                        FROM ocupacional_orden_eventos
+                        WHERE tipo_evento = "certificado_emitido"
+                        GROUP BY orden_id
+                    ) ce ON ce.orden_id = o.id'
                     . $whereSql
                     . ' ORDER BY o.id DESC LIMIT ? OFFSET ?';
         $stmtRows = $mysqliOcup->prepare($sqlRows);
@@ -630,12 +702,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'monto_total' => number_format((float)($r['monto_total'] ?? 0), 2, '.', ''),
                 'aptitud_final' => (string)($r['aptitud_final'] ?? ''),
                 'empresa' => (string)($r['razon_social'] ?? ''),
+                'subcontrata_empresa_id' => isset($r['subcontrata_empresa_id']) ? (int)$r['subcontrata_empresa_id'] : 0,
+                'subcontrata_empresa' => (string)($r['subcontrata_razon_social'] ?? ''),
+                'facturar_empresa_id' => isset($r['facturar_empresa_id']) ? (int)$r['facturar_empresa_id'] : 0,
+                'facturar_empresa' => (string)($r['facturar_razon_social'] ?? ''),
+                'firma_doctor' => (string)($r['firma_doctor'] ?? ''),
+                'modo' => (string)($r['modo'] ?? ''),
+                'gestante' => isset($r['gestante']) ? (int)$r['gestante'] : 0,
+                'documento' => (string)($r['documento'] ?? ''),
+                'indica_dr' => (string)($r['indica_dr'] ?? ''),
                 'documento_numero' => (string)($r['documento_numero'] ?? ''),
                 'puesto_trabajo' => (string)($r['puesto_trabajo'] ?? ''),
                 'protocolo_descripcion' => (string)($r['protocolo_descripcion'] ?? ''),
                 'tipo_codigo' => (string)($r['tipo_codigo'] ?? ''),
                 'total_items' => (int)($r['total_items'] ?? 0),
                 'total_completados' => (int)($r['total_completados'] ?? 0),
+                'certificado_emitido' => ((int)($r['total_certificados'] ?? 0)) > 0,
+                'certificado_emitido_at' => (string)($r['ultimo_certificado_at'] ?? ''),
             ];
         }
         $stmtRows->close();
@@ -812,7 +895,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     o.estado,
                     o.monto_total,
                     o.aptitud_final,
+                    ' . $sqlExprSubcontrataIdOrden . ' AS subcontrata_empresa_id,
+                    ' . $sqlExprFacturarIdOrden . ' AS facturar_empresa_id,
+                    ' . $sqlExprFirmaDoctorOrden . ' AS firma_doctor,
+                    ' . $sqlExprModoOrden . ' AS modo,
+                    ' . $sqlExprGestanteOrden . ' AS gestante,
+                    ' . $sqlExprDocumentoOrden . ' AS documento,
+                    ' . $sqlExprIndicaDrOrden . ' AS indica_dr,
                     e.razon_social,
+                    IFNULL(esub.razon_social, "") AS subcontrata_razon_social,
+                    IFNULL(efac.razon_social, "") AS facturar_razon_social,
                     t.documento_numero,
                     t.puesto_trabajo,
                     p.descripcion AS protocolo_descripcion,
@@ -820,7 +912,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     COALESCE(d.total_items, 0) AS total_items,
                     COALESCE(d.total_completados, 0) AS total_completados
                 FROM ocupacional_ordenes o
-                INNER JOIN empresas_ocupacionales e ON e.id = o.empresa_id
+                INNER JOIN empresas_ocupacionales e ON e.id = o.empresa_id'
+                . $sqlJoinSubcontrataOrden
+                . $sqlJoinFacturarOrden
+                . '
                 INNER JOIN pacientes_ocupacionales t ON t.id = o.trabajador_id
                 INNER JOIN ocupacional_protocolos_empresa p ON p.id = o.protocolo_id
                 INNER JOIN ocupacional_tipos_evaluacion te ON te.id = o.tipo_evaluacion_id
@@ -855,6 +950,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'monto_total' => number_format((float)($r['monto_total'] ?? 0), 2, '.', ''),
                 'aptitud_final' => (string)($r['aptitud_final'] ?? ''),
                 'empresa' => (string)($r['razon_social'] ?? ''),
+                'subcontrata_empresa_id' => isset($r['subcontrata_empresa_id']) ? (int)$r['subcontrata_empresa_id'] : 0,
+                'subcontrata_empresa' => (string)($r['subcontrata_razon_social'] ?? ''),
+                'facturar_empresa_id' => isset($r['facturar_empresa_id']) ? (int)$r['facturar_empresa_id'] : 0,
+                'facturar_empresa' => (string)($r['facturar_razon_social'] ?? ''),
+                'firma_doctor' => (string)($r['firma_doctor'] ?? ''),
+                'modo' => (string)($r['modo'] ?? ''),
+                'gestante' => isset($r['gestante']) ? (int)$r['gestante'] : 0,
+                'documento' => (string)($r['documento'] ?? ''),
+                'indica_dr' => (string)($r['indica_dr'] ?? ''),
                 'documento_numero' => (string)($r['documento_numero'] ?? ''),
                 'puesto_trabajo' => (string)($r['puesto_trabajo'] ?? ''),
                 'protocolo_descripcion' => (string)($r['protocolo_descripcion'] ?? ''),
@@ -878,29 +982,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             out_orden(422, ['success' => false, 'error' => 'id de orden es obligatorio']);
         }
 
-        $stmtCab = $mysqliOcup->prepare('SELECT
+        $stmtCabSql = 'SELECT
                                             o.id,
                                             o.codigo,
                                             o.fecha_orden,
                                             o.estado,
                                             o.monto_total,
                                             o.observacion,
+                                            ' . $sqlExprSubcontrataIdOrden . ' AS subcontrata_empresa_id,
+                                            ' . $sqlExprFacturarIdOrden . ' AS facturar_empresa_id,
+                                            ' . $sqlExprFirmaDoctorOrden . ' AS firma_doctor,
+                                            ' . $sqlExprModoOrden . ' AS modo,
+                                            ' . $sqlExprGestanteOrden . ' AS gestante,
+                                            ' . $sqlExprDocumentoOrden . ' AS documento,
+                                            ' . $sqlExprIndicaDrOrden . ' AS indica_dr,
                                             o.aptitud_final,
                                             o.restriccion_final,
                                             o.recomendacion_final,
                                             o.medico_responsable,
                                             e.razon_social AS empresa,
+                                            IFNULL(esub.razon_social, "") AS subcontrata_razon_social,
+                                            IFNULL(efac.razon_social, "") AS facturar_razon_social,
+                                            t.external_patient_id,
                                             t.documento_numero,
                                             t.puesto_trabajo,
                                             p.descripcion AS protocolo_descripcion,
                                             te.codigo AS tipo_codigo,
                                             te.nombre AS tipo_nombre
                                          FROM ocupacional_ordenes o
-                                         INNER JOIN empresas_ocupacionales e ON e.id = o.empresa_id
+                                                      INNER JOIN empresas_ocupacionales e ON e.id = o.empresa_id'
+                                                      . $sqlJoinSubcontrataOrden
+                                                      . $sqlJoinFacturarOrden
+                                                      . '
                                          INNER JOIN pacientes_ocupacionales t ON t.id = o.trabajador_id
                                          INNER JOIN ocupacional_protocolos_empresa p ON p.id = o.protocolo_id
                                          INNER JOIN ocupacional_tipos_evaluacion te ON te.id = o.tipo_evaluacion_id
-                                         WHERE o.id = ? LIMIT 1');
+                                                      WHERE o.id = ? LIMIT 1';
+        $stmtCab = $mysqliOcup->prepare($stmtCabSql);
         if (!$stmtCab) {
             out_orden(500, ['success' => false, 'error' => 'No se pudo consultar cabecera de orden']);
         }
@@ -911,6 +1029,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
         if (!$cab) {
             out_orden(404, ['success' => false, 'error' => 'Orden no encontrada']);
+        }
+
+        $pacienteNombreCompleto = '';
+        $pacienteHistoriaClinica = '';
+        $externalPatientId = (int)($cab['external_patient_id'] ?? 0);
+        if ($externalPatientId > 0) {
+            $stmtPac = $mysqli->prepare('SELECT nombre, apellido, historia_clinica FROM pacientes WHERE id = ? LIMIT 1');
+            if ($stmtPac) {
+                $stmtPac->bind_param('i', $externalPatientId);
+                $stmtPac->execute();
+                $pac = $stmtPac->get_result()->fetch_assoc();
+                $stmtPac->close();
+                if ($pac) {
+                    $pacienteNombreCompleto = trim((string)($pac['nombre'] ?? '') . ' ' . (string)($pac['apellido'] ?? ''));
+                    $pacienteHistoriaClinica = trim((string)($pac['historia_clinica'] ?? ''));
+                }
+            }
         }
 
         $stmtDet = $mysqliOcup->prepare('SELECT
@@ -995,11 +1130,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'estado' => (string)($cab['estado'] ?? ''),
                 'monto_total' => number_format((float)($cab['monto_total'] ?? 0), 2, '.', ''),
                 'observacion' => (string)($cab['observacion'] ?? ''),
+                'subcontrata_empresa_id' => isset($cab['subcontrata_empresa_id']) ? (int)$cab['subcontrata_empresa_id'] : 0,
+                'subcontrata_empresa' => (string)($cab['subcontrata_razon_social'] ?? ''),
+                'facturar_empresa_id' => isset($cab['facturar_empresa_id']) ? (int)$cab['facturar_empresa_id'] : 0,
+                'facturar_empresa' => (string)($cab['facturar_razon_social'] ?? ''),
+                'firma_doctor' => (string)($cab['firma_doctor'] ?? ''),
+                'modo' => (string)($cab['modo'] ?? ''),
+                'gestante' => isset($cab['gestante']) ? (int)$cab['gestante'] : 0,
+                'documento' => (string)($cab['documento'] ?? ''),
+                'indica_dr' => (string)($cab['indica_dr'] ?? ''),
                 'aptitud_final' => (string)($cab['aptitud_final'] ?? ''),
                 'restriccion_final' => (string)($cab['restriccion_final'] ?? ''),
                 'recomendacion_final' => (string)($cab['recomendacion_final'] ?? ''),
                 'medico_responsable' => (string)($cab['medico_responsable'] ?? ''),
                 'empresa' => (string)($cab['empresa'] ?? ''),
+                'paciente_nombre_completo' => $pacienteNombreCompleto,
+                'paciente_historia_clinica' => $pacienteHistoriaClinica,
                 'documento_numero' => (string)($cab['documento_numero'] ?? ''),
                 'puesto_trabajo' => (string)($cab['puesto_trabajo'] ?? ''),
                 'protocolo_descripcion' => (string)($cab['protocolo_descripcion'] ?? ''),
@@ -1114,6 +1260,14 @@ if ($accion === 'registrar_orden') {
     $tipoEvaluacionId = (int)($payload['tipo_evaluacion_id'] ?? 0);
     $fechaOrden = trim((string)($payload['fecha_orden'] ?? date('Y-m-d')));
     $observacion = trim((string)($payload['observacion'] ?? ''));
+    $subcontrataEmpresaId = (int)($payload['subcontrata_empresa_id'] ?? 0);
+    $facturarEmpresaId = (int)($payload['facturar_empresa_id'] ?? 0);
+    $firmaDoctor = strtoupper(trim((string)($payload['firma_doctor'] ?? 'GALLEGOS')));
+    $modo = strtoupper(trim((string)($payload['modo'] ?? 'CONVALIDACION')));
+    $gestanteRaw = $payload['gestante'] ?? 0;
+    $gestante = ($gestanteRaw === true || $gestanteRaw === 1 || $gestanteRaw === '1' || $gestanteRaw === 'true') ? 1 : 0;
+    $documento = trim((string)($payload['documento'] ?? ''));
+    $indicaDr = trim((string)($payload['indica_dr'] ?? ''));
 
     if ($empresaId <= 0 || $trabajadorId <= 0 || $protocoloId <= 0 || $tipoEvaluacionId <= 0) {
         out_orden(422, ['success' => false, 'error' => 'empresa_id, trabajador_id, protocolo_id y tipo_evaluacion_id son obligatorios']);
@@ -1122,6 +1276,32 @@ if ($accion === 'registrar_orden') {
     $fechaObj = DateTime::createFromFormat('Y-m-d', $fechaOrden);
     if (!$fechaObj || $fechaObj->format('Y-m-d') !== $fechaOrden) {
         out_orden(422, ['success' => false, 'error' => 'fecha_orden invalida. Formato esperado YYYY-MM-DD']);
+    }
+
+    $modosValidos = ['CONVALIDACION', 'REVALIDACION', 'REEVALUACION'];
+    if (!in_array($modo, $modosValidos, true)) {
+        out_orden(422, ['success' => false, 'error' => 'modo invalido']);
+    }
+
+    if ($firmaDoctor === '') {
+        out_orden(422, ['success' => false, 'error' => 'firma_doctor es obligatoria']);
+    }
+
+    foreach ([$subcontrataEmpresaId, $facturarEmpresaId] as $empresaRelacionadaId) {
+        if ($empresaRelacionadaId <= 0) {
+            continue;
+        }
+        $stmtEmpresaExtra = $mysqliOcup->prepare('SELECT id FROM empresas_ocupacionales WHERE id = ? LIMIT 1');
+        if (!$stmtEmpresaExtra) {
+            out_orden(500, ['success' => false, 'error' => 'No se pudo validar empresa relacionada']);
+        }
+        $stmtEmpresaExtra->bind_param('i', $empresaRelacionadaId);
+        $stmtEmpresaExtra->execute();
+        $existsExtra = $stmtEmpresaExtra->get_result()->fetch_assoc();
+        $stmtEmpresaExtra->close();
+        if (!$existsExtra) {
+            out_orden(422, ['success' => false, 'error' => 'Empresa relacionada invalida para subcontrata/facturar']);
+        }
     }
 
     $resolved = resolve_examenes_orden($mysqliOcup, $mysqli, $empresaId, $trabajadorId, $protocoloId, $tipoEvaluacionId);
@@ -1133,14 +1313,72 @@ if ($accion === 'registrar_orden') {
 
     $mysqliOcup->begin_transaction();
     try {
-        $stmtIns = $mysqliOcup->prepare('INSERT INTO ocupacional_ordenes
-                                         (codigo, empresa_id, trabajador_id, protocolo_id, tipo_evaluacion_id, fecha_orden, estado, monto_total, observacion, created_by, updated_by)
-                                         VALUES (NULL, ?, ?, ?, ?, ?, "emitida", ?, ?, ?, ?)');
+        $insertColumns = [
+            'codigo',
+            'empresa_id',
+            'trabajador_id',
+            'protocolo_id',
+            'tipo_evaluacion_id',
+            'fecha_orden',
+            'estado',
+            'monto_total',
+            'observacion',
+            'created_by',
+            'updated_by',
+        ];
+        $insertValues = ['NULL', '?', '?', '?', '?', '?', '"emitida"', '?', '?', '?', '?'];
+        $insertTypes = 'iiiisdsii';
+        $insertParams = [$empresaId, $trabajadorId, $protocoloId, $tipoEvaluacionId, $fechaOrden, (float)$resolved['total'], $observacion, $usuarioId, $usuarioId];
+
+        if (!empty($ordenExtraColumns['subcontrata_empresa_id'])) {
+            $insertColumns[] = 'subcontrata_empresa_id';
+            $insertValues[] = '?';
+            $insertTypes .= 'i';
+            $insertParams[] = $subcontrataEmpresaId > 0 ? $subcontrataEmpresaId : null;
+        }
+        if (!empty($ordenExtraColumns['facturar_empresa_id'])) {
+            $insertColumns[] = 'facturar_empresa_id';
+            $insertValues[] = '?';
+            $insertTypes .= 'i';
+            $insertParams[] = $facturarEmpresaId > 0 ? $facturarEmpresaId : null;
+        }
+        if (!empty($ordenExtraColumns['firma_doctor'])) {
+            $insertColumns[] = 'firma_doctor';
+            $insertValues[] = '?';
+            $insertTypes .= 's';
+            $insertParams[] = $firmaDoctor;
+        }
+        if (!empty($ordenExtraColumns['modo'])) {
+            $insertColumns[] = 'modo';
+            $insertValues[] = '?';
+            $insertTypes .= 's';
+            $insertParams[] = $modo;
+        }
+        if (!empty($ordenExtraColumns['gestante'])) {
+            $insertColumns[] = 'gestante';
+            $insertValues[] = '?';
+            $insertTypes .= 'i';
+            $insertParams[] = $gestante;
+        }
+        if (!empty($ordenExtraColumns['documento'])) {
+            $insertColumns[] = 'documento';
+            $insertValues[] = '?';
+            $insertTypes .= 's';
+            $insertParams[] = $documento;
+        }
+        if (!empty($ordenExtraColumns['indica_dr'])) {
+            $insertColumns[] = 'indica_dr';
+            $insertValues[] = '?';
+            $insertTypes .= 's';
+            $insertParams[] = $indicaDr;
+        }
+
+        $sqlInsert = 'INSERT INTO ocupacional_ordenes (' . implode(', ', $insertColumns) . ') VALUES (' . implode(', ', $insertValues) . ')';
+        $stmtIns = $mysqliOcup->prepare($sqlInsert);
         if (!$stmtIns) {
             throw new Exception('No se pudo preparar insercion de orden');
         }
-        $montoTotal = (float)$resolved['total'];
-        $stmtIns->bind_param('iiiisdsii', $empresaId, $trabajadorId, $protocoloId, $tipoEvaluacionId, $fechaOrden, $montoTotal, $observacion, $usuarioId, $usuarioId);
+        bind_params_dynamic_orden($stmtIns, $insertTypes, $insertParams);
         $stmtIns->execute();
         $ordenId = (int)$stmtIns->insert_id;
         $stmtIns->close();
@@ -1182,6 +1420,13 @@ if ($accion === 'registrar_orden') {
                 'codigo' => $codigo,
                 'total_items' => count($itemsAplican),
                 'monto_total' => number_format((float)$resolved['total'], 2, '.', ''),
+                'subcontrata_empresa_id' => $subcontrataEmpresaId,
+                'facturar_empresa_id' => $facturarEmpresaId,
+                'firma_doctor' => $firmaDoctor,
+                'modo' => $modo,
+                'gestante' => $gestante,
+                'documento' => $documento,
+                'indica_dr' => $indicaDr,
             ]
         );
 
@@ -1199,6 +1444,13 @@ if ($accion === 'registrar_orden') {
                 'fecha_orden' => $fechaOrden,
                 'monto_total' => number_format((float)$resolved['total'], 2, '.', ''),
                 'total_items' => count($itemsAplican),
+                'subcontrata_empresa_id' => $subcontrataEmpresaId,
+                'facturar_empresa_id' => $facturarEmpresaId,
+                'firma_doctor' => $firmaDoctor,
+                'modo' => $modo,
+                'gestante' => $gestante,
+                'documento' => $documento,
+                'indica_dr' => $indicaDr,
             ],
         ]);
     } catch (Throwable $e) {

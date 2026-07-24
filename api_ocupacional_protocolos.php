@@ -362,18 +362,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             out_proto(422, ['success' => false, 'error' => 'empresa_id es obligatorio']);
         }
 
-        $sql = 'SELECT DISTINCT puesto_trabajo
-                FROM pacientes_ocupacionales
-                WHERE empresa_id = ?
-                  AND estado_laboral = "activo"
-                  AND puesto_trabajo IS NOT NULL
-                  AND TRIM(puesto_trabajo) <> ""
-                ORDER BY puesto_trabajo ASC';
+                $sql = 'SELECT DISTINCT puesto_trabajo
+                                FROM (
+                                        SELECT p.puesto_trabajo AS puesto_trabajo
+                                        FROM pacientes_ocupacionales p
+                                        WHERE p.empresa_id = ?
+                                            AND p.estado_laboral = "activo"
+                                            AND p.puesto_trabajo IS NOT NULL
+                                            AND TRIM(p.puesto_trabajo) <> ""
+
+                                        UNION
+
+                                        SELECT c.puesto_trabajo AS puesto_trabajo
+                                        FROM ocupacional_protocolo_condiciones c
+                                        INNER JOIN ocupacional_protocolos_empresa pe ON pe.id = c.protocolo_id
+                                        WHERE pe.empresa_id = ?
+                                            AND c.puesto_trabajo IS NOT NULL
+                                            AND TRIM(c.puesto_trabajo) <> ""
+                                ) t
+                                ORDER BY puesto_trabajo ASC';
         $stmt = $mysqliOcup->prepare($sql);
         if (!$stmt) {
             out_proto(500, ['success' => false, 'error' => 'No se pudo listar puestos']);
         }
-        $stmt->bind_param('i', $empresaId);
+        $stmt->bind_param('ii', $empresaId, $empresaId);
         $stmt->execute();
         $res = $stmt->get_result();
         $rows = [];
@@ -901,20 +913,17 @@ if ($accion === 'guardar_condicion') {
                 out_proto(404, ['success' => false, 'error' => 'Condicion no encontrada']);
             }
 
-            $stmtDup = $mysqliOcup->prepare('SELECT id
-                                             FROM ocupacional_protocolo_condiciones
-                                             WHERE protocolo_id = ?
-                                               AND catalogo_id = ?
-                                               AND COALESCE(puesto_trabajo, "") = ?
-                                               AND COALESCE(sexo, "") = ?
-                                               AND IFNULL(edad_min, -1) = ?
-                                               AND IFNULL(edad_max, -1) = ?
-                                               AND id <> ?
-                                             LIMIT 1');
+                        $stmtDup = $mysqliOcup->prepare('SELECT id
+                                                                                         FROM ocupacional_protocolo_condiciones
+                                                                                         WHERE protocolo_id = ?
+                                                                                             AND catalogo_id = ?
+                                                                                             AND COALESCE(puesto_trabajo, "") = ?
+                                                                                             AND id <> ?
+                                                                                         LIMIT 1');
             if (!$stmtDup) {
                 out_proto(500, ['success' => false, 'error' => 'No se pudo validar duplicidad de condicion']);
             }
-            $stmtDup->bind_param('iissiii', $protocoloId, $catalogoId, $puestoTrabajo, $sexo, $edadMinCmp, $edadMaxCmp, $id);
+                        $stmtDup->bind_param('iisi', $protocoloId, $catalogoId, $puestoTrabajo, $id);
             $stmtDup->execute();
             $dup = $stmtDup->get_result()->fetch_assoc();
             $stmtDup->close();
@@ -946,19 +955,16 @@ if ($accion === 'guardar_condicion') {
             ]);
         }
 
-        $stmtDup = $mysqliOcup->prepare('SELECT id
-                                         FROM ocupacional_protocolo_condiciones
-                                         WHERE protocolo_id = ?
-                                           AND catalogo_id = ?
-                                           AND COALESCE(puesto_trabajo, "") = ?
-                                           AND COALESCE(sexo, "") = ?
-                                           AND IFNULL(edad_min, -1) = ?
-                                           AND IFNULL(edad_max, -1) = ?
-                                         LIMIT 1');
+                $stmtDup = $mysqliOcup->prepare('SELECT id
+                                                                                 FROM ocupacional_protocolo_condiciones
+                                                                                 WHERE protocolo_id = ?
+                                                                                     AND catalogo_id = ?
+                                                                                     AND COALESCE(puesto_trabajo, "") = ?
+                                                                                 LIMIT 1');
         if (!$stmtDup) {
             out_proto(500, ['success' => false, 'error' => 'No se pudo validar condicion']);
         }
-        $stmtDup->bind_param('iissii', $protocoloId, $catalogoId, $puestoTrabajo, $sexo, $edadMinCmp, $edadMaxCmp);
+                $stmtDup->bind_param('iis', $protocoloId, $catalogoId, $puestoTrabajo);
         $stmtDup->execute();
         $dup = $stmtDup->get_result()->fetch_assoc();
         $stmtDup->close();
@@ -1110,17 +1116,11 @@ if ($accion === 'aplicar_condicion_masiva') {
 
     $puestoSave = $puestoTrabajo === '' ? null : $puestoTrabajo;
     $sexoSave = $sexo === '' ? null : $sexo;
-    $edadMinCmp = $edadMin === null ? -1 : $edadMin;
-    $edadMaxCmp = $edadMax === null ? -1 : $edadMax;
-
     $stmtDup = $mysqliOcup->prepare('SELECT id
                                      FROM ocupacional_protocolo_condiciones
                                      WHERE protocolo_id = ?
                                        AND catalogo_id = ?
                                        AND COALESCE(puesto_trabajo, "") = ?
-                                       AND COALESCE(sexo, "") = ?
-                                       AND IFNULL(edad_min, -1) = ?
-                                       AND IFNULL(edad_max, -1) = ?
                                      LIMIT 1');
     if (!$stmtDup) {
         out_proto(500, ['success' => false, 'error' => 'No se pudo preparar validacion de duplicidad']);
@@ -1142,8 +1142,7 @@ if ($accion === 'aplicar_condicion_masiva') {
         $considerados++;
 
         $puestoCmp = $puestoTrabajo;
-        $sexoCmp = $sexo;
-        $stmtDup->bind_param('iissii', $protocoloId, $catalogoId, $puestoCmp, $sexoCmp, $edadMinCmp, $edadMaxCmp);
+        $stmtDup->bind_param('iis', $protocoloId, $catalogoId, $puestoCmp);
         $stmtDup->execute();
         $dup = $stmtDup->get_result()->fetch_assoc();
         if ($dup) {

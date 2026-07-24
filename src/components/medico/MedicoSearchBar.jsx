@@ -92,7 +92,7 @@ const MedicoSearchBar = ({
         </div>
         <input
           type="text"
-          placeholder="Buscar médicos por nombre, especialidad o email..."
+          placeholder="Buscar por nombre, especialidad, DNI, CMP, RNE, celular o email..."
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
           className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all duration-200 bg-white/80 backdrop-blur-sm"

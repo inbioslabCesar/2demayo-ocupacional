@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   darBajaTrabajadorOcupacional,
   listarEmpresasOcupacionales,
@@ -6,7 +7,22 @@ import {
 } from "../../api/ocupacionalApi";
 import FormTrabajador from "./FormTrabajador";
 
+const EMPRESA_STORAGE_KEY = "ocupacional_trabajadores_empresa_id_v1";
+
+function readStoredEmpresaId() {
+  try {
+    const raw = window.localStorage.getItem(EMPRESA_STORAGE_KEY);
+    const n = Number(raw || 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export default function TrabajadoresOcupacionalesPage() {
+  const [searchParams] = useSearchParams();
+  const empresaIdDesdeRuta = Number(searchParams.get("empresa_id") || 0);
+  const context = String(searchParams.get("context") || "").toLowerCase();
   const [estado, setEstado] = useState("todos");
   const [empresaId, setEmpresaId] = useState(0);
   const [q, setQ] = useState("");
@@ -21,6 +37,7 @@ export default function TrabajadoresOcupacionalesPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const requestRef = useRef(0);
+  const hydratedEmpresaRef = useRef(false);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -39,7 +56,7 @@ export default function TrabajadoresOcupacionalesPage() {
         if (!cancelled) {
           setEmpresas(rows || []);
         }
-      } catch (_) {
+      } catch {
         if (!cancelled) {
           setEmpresas([]);
         }
@@ -52,6 +69,38 @@ export default function TrabajadoresOcupacionalesPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (hydratedEmpresaRef.current || empresas.length === 0) {
+      return;
+    }
+
+    const empresaIdGuardada = readStoredEmpresaId();
+    const existe = (id) => empresas.some((e) => Number(e.id) === Number(id));
+
+    let empresaInicial = 0;
+    if (empresaIdDesdeRuta > 0 && existe(empresaIdDesdeRuta)) {
+      empresaInicial = empresaIdDesdeRuta;
+    } else if (empresaIdGuardada > 0 && existe(empresaIdGuardada)) {
+      empresaInicial = empresaIdGuardada;
+    }
+
+    if (empresaInicial > 0) {
+      setEmpresaId(empresaInicial);
+    }
+
+    hydratedEmpresaRef.current = true;
+  }, [empresas, empresaIdDesdeRuta]);
+
+  useEffect(() => {
+    try {
+      if (empresaId > 0) {
+        window.localStorage.setItem(EMPRESA_STORAGE_KEY, String(empresaId));
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [empresaId]);
 
   const loadTrabajadores = useCallback(async () => {
     const requestId = ++requestRef.current;
@@ -109,6 +158,12 @@ export default function TrabajadoresOcupacionalesPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Salud Ocupacional - Trabajadores</h1>
         <p className="text-sm text-slate-600 mt-1">Busque identidad en clinica y registre el contexto laboral por empresa.</p>
+        {context === "areas" ? (
+          <p className="text-xs text-emerald-700 mt-1">Contexto desde Empresa: revisando gestión de áreas por empresa.</p>
+        ) : null}
+        {context === "puestos" ? (
+          <p className="text-xs text-cyan-700 mt-1">Contexto desde Empresa: revisando gestión de puestos por empresa.</p>
+        ) : null}
       </div>
       <FormTrabajador onCreated={handleCreated} />
 

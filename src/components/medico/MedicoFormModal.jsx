@@ -185,6 +185,28 @@ const MedicoFormModal = ({
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
                       <span className="flex items-center gap-2">
                         <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h10M7 11h10M7 15h6" />
+                        </svg>
+                        DNI *
+                      </span>
+                    </label>
+                    <input
+                      type="text"
+                      name="dni"
+                      value={formData.dni || ''}
+                      onChange={onChange}
+                      className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                      placeholder="71609118"
+                      inputMode="numeric"
+                      maxLength={8}
+                      required={!isEditMode}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      <span className="flex items-center gap-2">
+                        <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                         </svg>
                         Nombre *
@@ -218,6 +240,68 @@ const MedicoFormModal = ({
                       className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
                       placeholder="Pérez García"
                       required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    <span className="flex items-center gap-2">
+                      <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      Direccion *
+                    </span>
+                  </label>
+                  <input
+                    type="text"
+                    name="direccion"
+                    value={formData.direccion || ''}
+                    onChange={onChange}
+                    className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                    placeholder="Av. Principal 123"
+                    required={!isEditMode}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      <span className="flex items-center gap-2">
+                        <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a2 2 0 011.894 1.368l1.498 4.493a2 2 0 01-.502 2.054l-2.257 2.257a11.042 11.042 0 005.516 5.516l2.257-2.257a2 2 0 012.054-.502l4.493 1.498A2 2 0 0121 18.72V22a2 2 0 01-2 2h-1C9.163 24 0 14.837 0 3V2a2 2 0 012-2h1z" />
+                        </svg>
+                        Telefono
+                      </span>
+                    </label>
+                    <input
+                      type="text"
+                      name="telefono"
+                      value={formData.telefono || ''}
+                      onChange={onChange}
+                      className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                      placeholder="014445566"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      <span className="flex items-center gap-2">
+                        <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a2 2 0 011.894 1.368l1.498 4.493a2 2 0 01-.502 2.054l-2.257 2.257a11.042 11.042 0 005.516 5.516l2.257-2.257a2 2 0 012.054-.502l4.493 1.498A2 2 0 0121 18.72V22a2 2 0 01-2 2h-1C9.163 24 0 14.837 0 3V2a2 2 0 012-2h1z" />
+                        </svg>
+                        Celular *
+                      </span>
+                    </label>
+                    <input
+                      type="text"
+                      name="celular"
+                      value={formData.celular || ''}
+                      onChange={onChange}
+                      className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                      placeholder="987654321"
+                      required={!isEditMode}
                     />
                   </div>
                 </div>

@@ -15,6 +15,10 @@ function DatosContacto({ form, handleChange }) {
           <input name="telefono" value={form.telefono} onChange={handleChange} placeholder="Número de contacto" type="tel" className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
         </div>
         <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Celular</label>
+          <input name="celular" value={form.celular || ""} onChange={handleChange} placeholder="Número celular" type="tel" className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+        </div>
+        <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
           <input name="email" value={form.email} onChange={handleChange} placeholder="Correo electrónico" type="email" className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
         </div>
