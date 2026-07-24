@@ -1,9 +1,7 @@
-USE `2demayo_so`;
-
 SET @exists_created_by_emp = (
   SELECT COUNT(*)
   FROM information_schema.columns
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'empresas_ocupacionales'
     AND column_name = 'created_by'
 );
@@ -19,7 +17,7 @@ DEALLOCATE PREPARE stmt;
 SET @exists_updated_by_emp = (
   SELECT COUNT(*)
   FROM information_schema.columns
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'empresas_ocupacionales'
     AND column_name = 'updated_by'
 );
@@ -35,7 +33,7 @@ DEALLOCATE PREPARE stmt;
 SET @exists_created_by_pac = (
   SELECT COUNT(*)
   FROM information_schema.columns
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'pacientes_ocupacionales'
     AND column_name = 'created_by'
 );
@@ -51,7 +49,7 @@ DEALLOCATE PREPARE stmt;
 SET @exists_updated_by_pac = (
   SELECT COUNT(*)
   FROM information_schema.columns
-  WHERE table_schema = '2demayo_so'
+  WHERE table_schema = DATABASE()
     AND table_name = 'pacientes_ocupacionales'
     AND column_name = 'updated_by'
 );
