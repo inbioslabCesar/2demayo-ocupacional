@@ -1,7 +1,10 @@
 -- ============================================================
 -- MIGRACIÓN 001 — Salud Ocupacional
+-- ESTADO: LEGADO (compatibilidad historica)
 -- Base de datos: 2demayo_so (aislada de la BD clínica principal)
 -- Ejecutar en phpMyAdmin o HeidiSQL antes de iniciar el módulo.
+-- Nota: para despliegues actuales usar la ruta oficial 20260614_000x
+-- documentada en migraciones/README_SALUD_OCUPACIONAL.md.
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS `2demayo_so`
