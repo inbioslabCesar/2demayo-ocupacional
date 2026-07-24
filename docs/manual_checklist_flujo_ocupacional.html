@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual Checklist - Flujo Completo Salud Ocupacional</title>
+  <style>
+    @page { size: A4; margin: 16mm; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; line-height: 1.35; }
+    h1 { font-size: 22px; margin: 0 0 8px 0; }
+    h2 { font-size: 15px; margin: 16px 0 8px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+    p.meta { margin: 0 0 10px 0; font-size: 12px; color: #334155; }
+    ul { margin: 4px 0 10px 18px; }
+    li { margin: 3px 0; }
+    .box { border: 1px solid #94a3b8; border-radius: 6px; padding: 10px 12px; margin-top: 8px; background: #f8fafc; }
+    .small { font-size: 12px; color: #334155; }
+    .footer { margin-top: 18px; font-size: 12px; color: #334155; }
+  </style>
+</head>
+<body>
+  <h1>Manual Checklist - Flujo Completo Salud Ocupacional</h1>
+  <p class="meta"><strong>Fecha:</strong> 2026-07-24 | <strong>Sistema:</strong> CLINICA 2 DE MAYO | <strong>Objetivo:</strong> Registrar empresa y completar flujo hasta certificado.</p>
+
+  <h2>1) Preparacion</h2>
+  <ul>
+    <li>[ ] Iniciar sesion con usuario con permisos de Salud Ocupacional.</li>
+    <li>[ ] Verificar que los catalogos carguen sin error.</li>
+    <li>[ ] Confirmar medico con firma configurada en CRUD Medicos.</li>
+    <li>[ ] Confirmar logo y datos de clinica en Configuracion.</li>
+  </ul>
+  <div class="box small">Criterio de salida: [ ] Se visualizan modulos Empresas, Trabajadores, Catalogo, Protocolos y Ordenes.</div>
+
+  <h2>2) Registro de Empresa</h2>
+  <p><strong>Ruta:</strong> Salud Ocupacional -> Empresas</p>
+  <ul>
+    <li>[ ] Click en Nueva empresa.</li>
+    <li>[ ] Completar RUC (11 digitos), razon social, direccion y contacto.</li>
+    <li>[ ] Guardar.</li>
+    <li>[ ] Verificar estado activo en listado.</li>
+  </ul>
+  <div class="box small">Criterio de salida: [ ] Empresa creada y seleccionable.</div>
+
+  <h2>3) Registro de Trabajador</h2>
+  <p><strong>Ruta:</strong> Salud Ocupacional -> Trabajadores</p>
+  <ul>
+    <li>[ ] Click en Nuevo trabajador.</li>
+    <li>[ ] Seleccionar empresa creada.</li>
+    <li>[ ] Ingresar documento, puesto y fecha ingreso.</li>
+    <li>[ ] Verificar vinculacion con paciente clinico si aplica.</li>
+    <li>[ ] Guardar y validar estado laboral activo.</li>
+  </ul>
+
+  <h2>4) Catalogo de Examenes por Empresa</h2>
+  <p><strong>Ruta:</strong> Salud Ocupacional -> Catalogo por Empresa</p>
+  <ul>
+    <li>[ ] Seleccionar empresa.</li>
+    <li>[ ] Agregar examenes requeridos.</li>
+    <li>[ ] Definir montos por examen.</li>
+    <li>[ ] Verificar estado activo.</li>
+  </ul>
+
+  <h2>5) Protocolo</h2>
+  <p><strong>Ruta:</strong> Salud Ocupacional -> Protocolos</p>
+  <ul>
+    <li>[ ] Crear protocolo para la empresa.</li>
+    <li>[ ] Agregar examenes desde catalogo.</li>
+    <li>[ ] Definir tipo de evaluacion (Pre, Periodico, Post).</li>
+    <li>[ ] Configurar condiciones (puesto, sexo, edad) si corresponde.</li>
+    <li>[ ] Guardar y activar protocolo.</li>
+  </ul>
+
+  <h2>6) Generacion de Orden Ocupacional</h2>
+  <p><strong>Ruta:</strong> Salud Ocupacional -> Ordenes</p>
+  <ul>
+    <li>[ ] Seleccionar empresa, trabajador, protocolo y tipo.</li>
+    <li>[ ] Seleccionar medico desde combo (fuente CRUD Medicos).</li>
+    <li>[ ] Click en Previsualizar examenes y verificar items aplicables.</li>
+    <li>[ ] Click en Registrar orden.</li>
+  </ul>
+  <div class="box small">Criterio de salida: [ ] Orden con codigo OO y estado emitida.</div>
+
+  <h2>7) Ejecucion de Examenes</h2>
+  <p><strong>Ruta:</strong> Ordenes -> Detalle</p>
+  <ul>
+    <li>[ ] Marcar cada examen como realizado u observado.</li>
+    <li>[ ] Guardar item por item.</li>
+    <li>[ ] Verificar avance 100 por ciento.</li>
+  </ul>
+  <div class="box small">Criterio de salida: [ ] Estado de orden cambia a completada.</div>
+
+  <h2>8) Cierre de Orden</h2>
+  <p><strong>Ruta:</strong> Ordenes (grilla)</p>
+  <ul>
+    <li>[ ] Click en Cerrar para la orden completada.</li>
+    <li>[ ] Confirmar dialogo de cierre formal.</li>
+  </ul>
+
+  <h2>9) Aptitud Final</h2>
+  <p><strong>Ruta:</strong> Ordenes -> Detalle -> Aptitud final y certificado</p>
+  <ul>
+    <li>[ ] Seleccionar aptitud final.</li>
+    <li>[ ] Completar medico responsable, restricciones y recomendaciones.</li>
+    <li>[ ] Guardar aptitud.</li>
+  </ul>
+
+  <h2>10) Emision de Certificado</h2>
+  <p><strong>Ruta:</strong> Ordenes -> boton Certificado</p>
+  <ul>
+    <li>[ ] Emitir certificado (no confundir con Hoja ruta).</li>
+    <li>[ ] Verificar PDF con nombre del paciente, HC, datos de orden, aptitud y firma.</li>
+    <li>[ ] Verificar nombre medico, especialidad, CMP y RNE.</li>
+    <li>[ ] Verificar badge Emit. y evento certificado_emitido.</li>
+  </ul>
+
+  <h2>11) Impresion y Archivo</h2>
+  <ul>
+    <li>[ ] Guardar PDF con nombre estandar certificado_aptitud_OOxxxxxx.pdf.</li>
+    <li>[ ] Imprimir copia fisica si aplica.</li>
+    <li>[ ] Adjuntar PDF al expediente digital del trabajador.</li>
+  </ul>
+
+  <h2>Checklist Rapido de Auditoria</h2>
+  <ul>
+    <li>[ ] Orden cerrada.</li>
+    <li>[ ] Aptitud final registrada.</li>
+    <li>[ ] Certificado emitido.</li>
+    <li>[ ] Firma del medico visible.</li>
+    <li>[ ] Bitacora con certificado_emitido.</li>
+    <li>[ ] PDF legible y completo.</li>
+  </ul>
+
+  <h2>Problemas comunes y solucion corta</h2>
+  <ul>
+    <li>Boton Certificado deshabilitado: completar ejecucion, cerrar orden y guardar aptitud.</li>
+    <li>Sale Hoja ruta: usar boton Certificado.</li>
+    <li>No aparece firma: verificar firma en CRUD Medicos y reemitir.</li>
+    <li>No sale paciente o HC: revisar vinculacion external_patient_id.</li>
+  </ul>
+
+  <p class="footer">Responsable de verificacion: ____________________ | Fecha: ____________________ | Observaciones: ________________________________________________</p>
+</body>
+</html>
