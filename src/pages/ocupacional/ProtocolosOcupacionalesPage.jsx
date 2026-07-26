@@ -33,6 +33,7 @@ function readStoredEmpresaId() {
 }
 
 export default function ProtocolosOcupacionalesPage() {
+  const MODO_LEGACY_UI = true;
   const [searchParams] = useSearchParams();
   const empresaIdDesdeRuta = Number(searchParams.get("empresa_id") || 0);
   const context = String(searchParams.get("context") || "").toLowerCase();
@@ -43,7 +44,7 @@ export default function ProtocolosOcupacionalesPage() {
   const [protocoloId, setProtocoloId] = useState(0);
   const [descripcionProtocolo, setDescripcionProtocolo] = useState("");
   const [guardandoProtocolo, setGuardandoProtocolo] = useState(false);
-  const [sembrarMontosBaseNuevoProtocolo, setSembrarMontosBaseNuevoProtocolo] = useState(true);
+  const [sembrarMontosBaseNuevoProtocolo, setSembrarMontosBaseNuevoProtocolo] = useState(false);
   const [copiandoConfig, setCopiandoConfig] = useState(false);
   const [copiarOrigenId, setCopiarOrigenId] = useState(0);
   const [copiarMontos, setCopiarMontos] = useState(true);
@@ -83,7 +84,11 @@ export default function ProtocolosOcupacionalesPage() {
   const [condBulkPreviewMsg, setCondBulkPreviewMsg] = useState("");
   const protocolosRequestRef = useRef(0);
   const matrizRequestRef = useRef(0);
+  const montoOriginalRef = useRef(new Map());
+  const puestosLoadedEmpresaRef = useRef(0);
+  const puestosRequestRef = useRef(0);
   const hydratedEmpresaRef = useRef(false);
+  const [isDesktopMatrix, setIsDesktopMatrix] = useState(() => window.matchMedia("(min-width: 768px)").matches);
   const [condForm, setCondForm] = useState({
     puesto_trabajo: "",
     sexo: "",
@@ -105,6 +110,13 @@ export default function ProtocolosOcupacionalesPage() {
     }, 300);
     return () => window.clearTimeout(t);
   }, [q]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const onChange = (event) => setIsDesktopMatrix(event.matches);
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
+  }, []);
 
   const cargarEmpresas = useCallback(async () => {
     try {
@@ -179,15 +191,17 @@ export default function ProtocolosOcupacionalesPage() {
         return;
       }
       setProtocolos(data);
-      if (!data.find((p) => Number(p.id) === Number(protocoloId))) {
-        setProtocoloId(data.length ? Number(data[0].id) : 0);
-      }
+      setProtocoloId((currentId) => (
+        data.some((p) => Number(p.id) === Number(currentId))
+          ? currentId
+          : (data.length ? Number(data[0].id) : 0)
+      ));
     } catch (err) {
       if (requestId === protocolosRequestRef.current) {
         setError(err.message || "No se pudo cargar protocolos");
       }
     }
-  }, [empresaId, protocoloId]);
+  }, [empresaId]);
 
   useEffect(() => {
     cargarProtocolos();
@@ -201,19 +215,24 @@ export default function ProtocolosOcupacionalesPage() {
   }, [protocolos, copiarOrigenId, protocoloId]);
 
   useEffect(() => {
-    async function cargarPuestos() {
-      if (!empresaId) {
-        setPuestosEmpresa([]);
-        return;
-      }
-      try {
-        const data = await listarPuestosOcupacionalesEmpresa(empresaId);
-        setPuestosEmpresa(data || []);
-      } catch {
+    setPuestosEmpresa([]);
+    puestosLoadedEmpresaRef.current = 0;
+    puestosRequestRef.current += 1;
+  }, [empresaId]);
+
+  const cargarPuestos = useCallback(async () => {
+    if (!empresaId || puestosLoadedEmpresaRef.current === Number(empresaId)) return;
+    const requestId = ++puestosRequestRef.current;
+    try {
+      const data = await listarPuestosOcupacionalesEmpresa(empresaId);
+      if (requestId !== puestosRequestRef.current) return;
+      setPuestosEmpresa(data || []);
+      puestosLoadedEmpresaRef.current = Number(empresaId);
+    } catch {
+      if (requestId === puestosRequestRef.current) {
         setPuestosEmpresa([]);
       }
     }
-    cargarPuestos();
   }, [empresaId]);
 
   const cargarMatriz = useCallback(async () => {
@@ -382,6 +401,13 @@ export default function ProtocolosOcupacionalesPage() {
 
     const monto = normalizeMoneyInput(currentValue);
     const key = `${row.catalogo_id}-${tipoId}`;
+    const montoOriginal = String(montoOriginalRef.current.get(key) ?? "");
+    const montoAnterior = Number(montoOriginal || 0);
+    montoOriginalRef.current.delete(key);
+
+    if (monto === montoOriginal) {
+      return;
+    }
 
     setSavingCellKey(key);
     setSavedCellKey("");
@@ -402,15 +428,23 @@ export default function ProtocolosOcupacionalesPage() {
             ...r,
             montos: {
               ...r.montos,
-              [String(tipoId)]: saved.monto || "",
+              [String(tipoId)]: {
+                valor: saved.monto || "",
+                origen: saved.origen || (saved.monto ? "protocolo" : "protocolo_excluido"),
+              },
             },
           };
         })
       );
 
-      setSavedCellKey(key);
+      setTotales((prev) => ({
+        ...prev,
+        [String(tipoId)]: (
+          Number(prev?.[String(tipoId)] || 0) - montoAnterior + Number(saved.monto || 0)
+        ).toFixed(2),
+      }));
 
-      await cargarMatriz();
+      setSavedCellKey(key);
     } catch (err) {
       setCellErrorKey(key);
       setError(err.message || "No se pudo guardar monto");
@@ -420,7 +454,31 @@ export default function ProtocolosOcupacionalesPage() {
     }
   };
 
-  const onRestablecerMontoBase = async (row, tipoId) => {
+  const onMontoFocus = (catalogoId, tipoId, value) => {
+    const key = `${catalogoId}-${tipoId}`;
+    montoOriginalRef.current.set(key, normalizeMoneyInput(value));
+  };
+
+  const onMontoChange = (catalogoId, tipoId, valor) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (Number(row.catalogo_id) !== Number(catalogoId)) return row;
+        const montoActual = row.montos?.[String(tipoId)] || {};
+        return {
+          ...row,
+          montos: {
+            ...row.montos,
+            [String(tipoId)]: {
+              ...montoActual,
+              valor,
+            },
+          },
+        };
+      })
+    );
+  };
+
+  const onQuitarMonto = async (row, tipoId) => {
     if (!protocoloId) return;
 
     const key = `${row.catalogo_id}-${tipoId}`;
@@ -430,7 +488,7 @@ export default function ProtocolosOcupacionalesPage() {
     setError("");
 
     try {
-      await guardarMontoProtocoloOcupacional({
+      const saved = await guardarMontoProtocoloOcupacional({
         protocoloId,
         catalogoId: row.catalogo_id,
         tipoEvaluacionId: tipoId,
@@ -438,11 +496,29 @@ export default function ProtocolosOcupacionalesPage() {
         restablecerBase: true,
       });
 
-      await cargarMatriz();
+      const montoAnterior = Number(row.montos?.[String(tipoId)]?.valor || 0);
+      setRows((prev) => prev.map((currentRow) => (
+        Number(currentRow.catalogo_id) !== Number(row.catalogo_id)
+          ? currentRow
+          : {
+              ...currentRow,
+              montos: {
+                ...currentRow.montos,
+                [String(tipoId)]: {
+                  valor: saved.monto || "",
+                  origen: saved.origen || "sin_configurar",
+                },
+              },
+            }
+      )));
+      setTotales((prev) => ({
+        ...prev,
+        [String(tipoId)]: Math.max(0, Number(prev?.[String(tipoId)] || 0) - montoAnterior).toFixed(2),
+      }));
       setSavedCellKey(key);
     } catch (err) {
       setCellErrorKey(key);
-      setError(err.message || "No se pudo restablecer al precio base");
+      setError(err.message || "No se pudo quitar el monto configurado");
     } finally {
       setSavingCellKey("");
     }
@@ -479,7 +555,10 @@ export default function ProtocolosOcupacionalesPage() {
     setCondCatalogoSeleccionado(row);
     setCondForm({ puesto_trabajo: "", sexo: "", edad_min: "", edad_max: "" });
     setCondEditingId(0);
-    await cargarCondiciones(row.catalogo_id);
+    await Promise.all([
+      cargarPuestos(),
+      cargarCondiciones(row.catalogo_id),
+    ]);
   };
 
   const onGuardarCondicion = async (e) => {
@@ -541,7 +620,11 @@ export default function ProtocolosOcupacionalesPage() {
     setCondDeletingId(Number(id));
     setCondError("");
     try {
-      await eliminarCondicionProtocoloOcupacional(id);
+      await eliminarCondicionProtocoloOcupacional({
+        id,
+        protocoloId,
+        catalogoId: condCatalogoSeleccionado?.catalogo_id,
+      });
       if (condCatalogoSeleccionado?.catalogo_id) {
         await cargarCondiciones(condCatalogoSeleccionado.catalogo_id);
       }
@@ -614,8 +697,9 @@ export default function ProtocolosOcupacionalesPage() {
     [plantillas, plantillaCodigo]
   );
 
-  const onCargarPlantilla = () => {
+  const onCargarPlantilla = async () => {
     if (!plantillaSeleccionada) return;
+    await cargarPuestos();
     const reglas = Array.isArray(plantillaSeleccionada.reglas) ? plantillaSeleccionada.reglas : [];
     setPlantillaReglas(
       reglas.map((regla) => ({
@@ -827,7 +911,7 @@ export default function ProtocolosOcupacionalesPage() {
                 checked={sembrarMontosBaseNuevoProtocolo}
                 onChange={(e) => setSembrarMontosBaseNuevoProtocolo(e.target.checked)}
               />
-              Crear protocolo con precios base listos desde Exámenes Generales
+              Inicializar todas las evaluaciones con precios de Exámenes Generales
             </label>
           </div>
           <button
@@ -852,7 +936,9 @@ export default function ProtocolosOcupacionalesPage() {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-3">
+        {!MODO_LEGACY_UI ? (
+          <>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-emerald-900">Copiar configuracion entre protocolos</h2>
             <p className="text-xs text-emerald-800">
@@ -915,9 +1001,9 @@ export default function ProtocolosOcupacionalesPage() {
             </button>
             {copiarMsg ? <p className="text-xs text-emerald-800">{copiarMsg}</p> : null}
           </div>
-        </div>
+          </div>
 
-        <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 space-y-3">
+          <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-sky-900">Plantillas referenciales editables</h2>
             <p className="text-xs text-sky-800">
@@ -1034,9 +1120,9 @@ export default function ProtocolosOcupacionalesPage() {
               </div>
             </div>
           ) : null}
-        </div>
+          </div>
 
-        <form onSubmit={onAplicarCondicionMasiva} className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+          <form onSubmit={onAplicarCondicionMasiva} className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
           <h2 className="text-sm font-semibold text-amber-900">Automatizacion rapida de condiciones por edad</h2>
           <p className="text-xs text-amber-800">
             Aplica una condicion a todos los examenes que coincidan con un filtro. Ejemplo: filtro "electrocardiograma", edad min 40.
@@ -1109,7 +1195,9 @@ export default function ProtocolosOcupacionalesPage() {
             {condBulkPreviewMsg ? <p className="text-xs text-blue-700">{condBulkPreviewMsg}</p> : null}
             {condBulkMsg ? <p className="text-xs text-emerald-700">{condBulkMsg}</p> : null}
           </div>
-        </form>
+            </form>
+          </>
+        ) : null}
 
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
           <input
@@ -1135,20 +1223,21 @@ export default function ProtocolosOcupacionalesPage() {
 
         <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
           Los campos <span className="font-semibold">PRE</span>, <span className="font-semibold">PER</span> y <span className="font-semibold">POST</span> son editables.
-          Haga clic en el monto, escriba el valor y salga del campo para guardar automaticamente. Si borra el valor, ese examen quedará excluido de la orden ocupacional para ese tipo.
+          Haga clic en el monto, escriba el valor y salga del campo para guardar automaticamente. Si borra el valor, se quitará la configuración de ese examen para ese tipo.
         </div>
 
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Si una celda muestra <span className="font-semibold">Heredado</span>, esta usando el precio base configurado en Exámenes Generales.
-          Si muestra <span className="font-semibold">Personalizado</span>, ya tiene un monto propio guardado en el protocolo.
-          Si muestra <span className="font-semibold">Excluido</span>, no aparecerá en la orden ocupacional.
-          Los personalizados pueden volver al precio base usando <span className="font-semibold">Restablecer</span>.
+          Una celda <span className="font-semibold">Sin configurar</span> no forma parte del protocolo para ese tipo de evaluación.
+          Si muestra <span className="font-semibold">Configurado</span>, el monto está guardado específicamente en el protocolo seleccionado.
+          Los registros históricos marcados como <span className="font-semibold">Excluido</span> tampoco aparecerán en la orden ocupacional.
+          Use <span className="font-semibold">Quitar</span> para eliminar una configuración existente.
         </div>
 
         {loading ? <p className="text-sm text-slate-500">Cargando matriz de protocolo...</p> : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-        <div className="overflow-x-auto hidden md:block">
+        {isDesktopMatrix ? (
+        <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b text-left text-slate-500">
@@ -1189,8 +1278,8 @@ export default function ProtocolosOcupacionalesPage() {
                     const busy = savingCellKey === cellKey;
                     const saved = savedCellKey === cellKey;
                     const failed = cellErrorKey === cellKey;
-                    const montoMeta = row.montos?.[String(t.id)] || { valor: "", origen: "examen_general" };
-                    const origenMonto = montoMeta?.origen || "examen_general";
+                    const montoMeta = row.montos?.[String(t.id)] || { valor: "", origen: "sin_configurar" };
+                    const origenMonto = montoMeta?.origen || "sin_configurar";
                     const isPersonalizado = origenMonto === "protocolo";
                     const isExcluido = origenMonto === "protocolo_excluido";
                     return (
@@ -1199,25 +1288,27 @@ export default function ProtocolosOcupacionalesPage() {
                           <input
                             type="text"
                             className="w-28 rounded border border-blue-300 bg-blue-50 px-2 py-1 text-right font-medium text-slate-800 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-200"
-                            defaultValue={montoMeta?.valor ?? ""}
+                            value={montoMeta?.valor ?? ""}
                             placeholder="Editar"
                             title={`Campo editable ${t.codigo}. Se guarda al salir del campo o con Enter.`}
                             aria-label={`Monto editable ${t.codigo} para ${row.descripcion}`}
+                            onFocus={(e) => onMontoFocus(row.catalogo_id, t.id, e.target.value)}
+                            onChange={(e) => onMontoChange(row.catalogo_id, t.id, e.target.value)}
                             onBlur={(e) => onMontoBlur(row, t.id, e.target.value)}
                             onKeyDown={onMontoKeyDown}
                             disabled={!protocoloId || busy}
                           />
                           <span className={`text-[10px] font-semibold ${origenMonto === "protocolo" ? "text-violet-700" : "text-amber-700"}`}>
-                            {isPersonalizado ? "Personalizado" : isExcluido ? "Excluido" : "Heredado"}
+                            {isPersonalizado ? "Configurado" : isExcluido ? "Excluido" : "Sin configurar"}
                           </span>
                           {(isPersonalizado || isExcluido) ? (
                             <button
                               type="button"
                               className="rounded border border-amber-300 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-                              onClick={() => onRestablecerMontoBase(row, t.id)}
+                              onClick={() => onQuitarMonto(row, t.id)}
                               disabled={busy}
                             >
-                              Restablecer
+                              Quitar
                             </button>
                           ) : null}
                           <span className={`text-[10px] font-semibold ${busy ? "text-amber-600" : saved ? "text-emerald-600" : failed ? "text-red-600" : "text-slate-400"}`}>
@@ -1247,8 +1338,8 @@ export default function ProtocolosOcupacionalesPage() {
             ) : null}
           </table>
         </div>
-
-        <div className="md:hidden space-y-3">
+        ) : (
+        <div className="space-y-3">
           {rows.map((row) => (
             <div key={row.catalogo_id} className="rounded-lg border border-slate-200 p-3 space-y-2">
               <div>
@@ -1273,8 +1364,8 @@ export default function ProtocolosOcupacionalesPage() {
                   const busy = savingCellKey === cellKey;
                   const saved = savedCellKey === cellKey;
                   const failed = cellErrorKey === cellKey;
-                  const montoMeta = row.montos?.[String(t.id)] || { valor: "", origen: "examen_general" };
-                  const origenMonto = montoMeta?.origen || "examen_general";
+                  const montoMeta = row.montos?.[String(t.id)] || { valor: "", origen: "sin_configurar" };
+                  const origenMonto = montoMeta?.origen || "sin_configurar";
                   const isPersonalizado = origenMonto === "protocolo";
                   const isExcluido = origenMonto === "protocolo_excluido";
                   return (
@@ -1284,27 +1375,29 @@ export default function ProtocolosOcupacionalesPage() {
                         <input
                           type="text"
                           className="w-28 rounded border border-blue-300 bg-blue-50 px-2 py-1 text-right font-medium text-slate-800 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-200"
-                          defaultValue={montoMeta?.valor ?? ""}
+                          value={montoMeta?.valor ?? ""}
                           placeholder="Editar"
                           title={`Campo editable ${t.codigo}. Se guarda al salir del campo o con Enter.`}
                           aria-label={`Monto editable ${t.codigo} para ${row.descripcion}`}
+                          onFocus={(e) => onMontoFocus(row.catalogo_id, t.id, e.target.value)}
+                          onChange={(e) => onMontoChange(row.catalogo_id, t.id, e.target.value)}
                           onBlur={(e) => onMontoBlur(row, t.id, e.target.value)}
                           onKeyDown={onMontoKeyDown}
                           disabled={!protocoloId || busy}
                         />
                       </label>
                       <p className={`text-right text-[10px] font-semibold ${isPersonalizado ? "text-violet-700" : isExcluido ? "text-red-700" : "text-amber-700"}`}>
-                        {isPersonalizado ? "Personalizado" : isExcluido ? "Excluido" : "Heredado"}
+                        {isPersonalizado ? "Configurado" : isExcluido ? "Excluido" : "Sin configurar"}
                       </p>
                       {(isPersonalizado || isExcluido) ? (
                         <div className="flex justify-end">
                           <button
                             type="button"
                             className="rounded border border-amber-300 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-                            onClick={() => onRestablecerMontoBase(row, t.id)}
+                            onClick={() => onQuitarMonto(row, t.id)}
                             disabled={busy}
                           >
-                            Restablecer
+                            Quitar
                           </button>
                         </div>
                       ) : null}
@@ -1321,6 +1414,7 @@ export default function ProtocolosOcupacionalesPage() {
             <p className="text-sm text-slate-500">No hay examenes activos en catalogo para esta empresa.</p>
           ) : null}
         </div>
+        )}
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-slate-500">Total: {meta.total || 0} registros</span>
@@ -1367,18 +1461,16 @@ export default function ProtocolosOcupacionalesPage() {
           </div>
 
           <form onSubmit={onGuardarCondicion} className="grid grid-cols-1 gap-2 md:grid-cols-5">
-            <input
-              list="puestos-empresa"
+            <select
               className="rounded-md border border-slate-300 px-3 py-2 text-sm md:col-span-2"
-              placeholder="Puesto (opcional)"
               value={condForm.puesto_trabajo}
               onChange={(e) => setCondForm((prev) => ({ ...prev, puesto_trabajo: e.target.value }))}
-            />
-            <datalist id="puestos-empresa">
+            >
+              <option value="">Todos los puestos</option>
               {puestosEmpresa.map((p) => (
-                <option key={p.puesto_trabajo} value={p.puesto_trabajo} />
+                <option key={p.puesto_trabajo} value={p.puesto_trabajo}>{p.puesto_trabajo}</option>
               ))}
-            </datalist>
+            </select>
 
             <select
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"

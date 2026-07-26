@@ -34,6 +34,7 @@ function resolver_select_medico_login($conn): string {
         'abreviatura_profesional' => "COALESCE(abreviatura_profesional, 'Dr(a).') AS abreviatura_profesional",
         'colegio_sigla' => 'colegio_sigla',
         'nro_colegiatura' => 'nro_colegiatura',
+        'rna' => 'rna',
     ];
 
     $columns = obtener_columnas_medicos_login($conn);

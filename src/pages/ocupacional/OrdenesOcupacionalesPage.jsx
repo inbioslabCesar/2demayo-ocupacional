@@ -10,9 +10,15 @@ import {
   obtenerHistoriaClinicaOcupacionalConsolidada,
   obtenerResultadoClinicoOcupacional,
   guardarResultadoClinicoOcupacional,
+  registrarEmisionPdfResultadoClinicoOcupacional,
   guardarPlantillaResultadoClinicoOcupacional,
   eliminarPlantillaResultadoClinicoOcupacional,
   actualizarDetalleOrdenOcupacional,
+  listarInterconsultasOcupacionales,
+  crearInterconsultaOcupacional,
+  responderInterconsultaOcupacional,
+  levantarInterconsultaOcupacional,
+  anularInterconsultaOcupacional,
   listarEventosOrdenOcupacional,
   obtenerDetalleOrdenOcupacional,
   obtenerReporteOrdenesOcupacionales,
@@ -26,7 +32,7 @@ import {
   registrarOrdenOcupacional,
 } from "../../api/ocupacionalApi";
 import { BASE_URL } from "../../config/config";
-import { formatColegiatura, formatProfesionalName } from "../../utils/profesionalDisplay";
+import { formatProfesionalName } from "../../utils/profesionalDisplay";
 
 function resolveAssetUrl(rawValue) {
   const raw = String(rawValue || "").trim();
@@ -57,6 +63,51 @@ async function loadImageAsDataUrl(imageUrl) {
   });
 }
 
+async function cropImageWhitespaceDataUrl(dataUrl) {
+  if (!dataUrl) return "";
+  const image = await new Promise((resolve, reject) => {
+    const loadedImage = new Image();
+    loadedImage.onload = () => resolve(loadedImage);
+    loadedImage.onerror = () => reject(new Error("No se pudo procesar el logo ocupacional"));
+    loadedImage.src = dataUrl;
+  });
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = image.naturalWidth || image.width;
+  sourceCanvas.height = image.naturalHeight || image.height;
+  const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  sourceContext.drawImage(image, 0, 0);
+  const pixels = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height).data;
+  let minX = sourceCanvas.width;
+  let minY = sourceCanvas.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < sourceCanvas.height; y += 1) {
+    for (let x = 0; x < sourceCanvas.width; x += 1) {
+      const index = (y * sourceCanvas.width + x) * 4;
+      const visible = pixels[index + 3] > 12
+        && (pixels[index] < 248 || pixels[index + 1] < 248 || pixels[index + 2] < 248);
+      if (!visible) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX || maxY < minY) return dataUrl;
+  const padding = Math.max(2, Math.round(Math.min(sourceCanvas.width, sourceCanvas.height) * 0.01));
+  minX = Math.max(0, minX - padding);
+  minY = Math.max(0, minY - padding);
+  maxX = Math.min(sourceCanvas.width - 1, maxX + padding);
+  maxY = Math.min(sourceCanvas.height - 1, maxY + padding);
+  const cropWidth = maxX - minX + 1;
+  const cropHeight = maxY - minY + 1;
+  const outputCanvas = document.createElement("canvas");
+  outputCanvas.width = cropWidth;
+  outputCanvas.height = cropHeight;
+  outputCanvas.getContext("2d").drawImage(sourceCanvas, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  return outputCanvas.toDataURL("image/png");
+}
+
 async function fetchConfiguracionClinica() {
   const response = await fetch(`${BASE_URL}api_get_configuracion.php`, {
     method: "GET",
@@ -75,7 +126,7 @@ async function fetchConfiguracionClinica() {
 }
 
 async function fetchMedicosCrud() {
-  const response = await fetch(`${BASE_URL}api_medicos.php`, {
+  const response = await fetch(`${BASE_URL}api_medicos.php?accion=catalogo_certificadores`, {
     method: "GET",
     credentials: "include",
     cache: "no-store",
@@ -88,6 +139,13 @@ async function fetchMedicosCrud() {
   }
   if (!response.ok || !payload?.success) return [];
   return Array.isArray(payload.medicos) ? payload.medicos : [];
+}
+
+function isMedicoCertificador(medico) {
+  const tipo = String(medico?.tipo_profesional || "medico").trim().toLowerCase();
+  const cmp = String(medico?.cmp || medico?.nro_colegiatura || "").trim();
+  const tieneFirma = Number(medico?.tiene_firma || 0) === 1 || String(medico?.firma || "").trim() !== "";
+  return tipo === "medico" && Boolean(cmp) && tieneFirma;
 }
 
 function normalizeCompareText(value) {
@@ -110,6 +168,12 @@ function buildMedicoToken(medico) {
 function resolveMedicoFromOrden(det, medicos = []) {
   const lista = Array.isArray(medicos) ? medicos : [];
   if (!lista.length) return null;
+
+  const medicoId = Number(det?.medico_responsable_id || 0);
+  if (medicoId > 0) {
+    const byId = lista.find((m) => Number(m.id) === medicoId);
+    if (byId) return byId;
+  }
 
   const firmas = [det?.medico_responsable, det?.firma_doctor]
     .map((v) => String(v || "").trim())
@@ -143,7 +207,9 @@ function resolveMedicoFromOrden(det, medicos = []) {
 
   if (!matches.length) return null;
 
-  const withFirma = matches.find((m) => String(m?.firma || "").trim() !== "");
+  const withFirma = matches.find((m) => (
+    Number(m?.tiene_firma || 0) === 1 || String(m?.firma || "").trim() !== ""
+  ));
   return withFirma || matches[0];
 }
 
@@ -166,6 +232,222 @@ function prettyJsonInput(value) {
   } catch {
     return "[]";
   }
+}
+
+function normalizeHistoriaList(value) {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    const text = parsed.trim();
+    if (!text) return [];
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return [text];
+    }
+  }
+  if (parsed === null || parsed === undefined) return [];
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  return items.map((item) => {
+    if (item === null || item === undefined) return "";
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") return String(item);
+    return Object.entries(item)
+      .map(([key, itemValue]) => `${key.replaceAll("_", " ")}: ${String(itemValue ?? "")}`)
+      .join(" | ");
+  }).filter((item) => item.trim() !== "");
+}
+
+function ListaClinicaEditable({ title, singular, value, onChange, disabled }) {
+  const items = normalizeHistoriaList(value);
+  const updateItem = (index, nextValue) => onChange(items.map((item, currentIndex) => currentIndex === index ? nextValue : item));
+  const removeItem = (index) => onChange(items.filter((_, currentIndex) => currentIndex !== index));
+  return (
+    <fieldset className="rounded border border-slate-200 bg-white p-3 disabled:opacity-70" disabled={disabled}>
+      <legend className="px-1 text-xs font-semibold text-slate-700">{title}</legend>
+      <div className="space-y-2">
+        {items.length === 0 ? <p className="text-xs text-slate-500">Sin registros</p> : null}
+        {items.map((item, index) => (
+          <div key={`${title}-${index}`} className="flex items-start gap-2">
+            <textarea
+              className="min-h-14 min-w-0 flex-1 resize-y rounded border border-slate-300 px-2 py-1 text-xs"
+              value={item}
+              onChange={(event) => updateItem(index, event.target.value)}
+              aria-label={`${singular} ${index + 1}`}
+            />
+            <button type="button" className="shrink-0 rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50" onClick={() => removeItem(index)}>
+              Eliminar
+            </button>
+          </div>
+        ))}
+        <button type="button" className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50" onClick={() => onChange([...items, ""])}>
+          Agregar {singular.toLowerCase()}
+        </button>
+      </div>
+    </fieldset>
+  );
+}
+
+function CampoClinico({ label, value, onChange, type = "text", unit = "", multiline = false, disabled = false }) {
+  return (
+    <label className="block min-w-0 text-xs font-medium text-slate-700">
+      <span className="mb-1 block">{label}</span>
+      <span className="flex items-center rounded border border-slate-300 bg-white focus-within:border-cyan-500 focus-within:ring-1 focus-within:ring-cyan-500">
+        {multiline ? (
+          <textarea className="min-h-20 w-full resize-y rounded border-0 px-2 py-1.5 text-xs outline-none" value={value ?? ""} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
+        ) : (
+          <input type={type} className="min-w-0 flex-1 rounded border-0 px-2 py-1.5 text-xs outline-none" value={value ?? ""} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
+        )}
+        {!multiline && unit ? <span className="shrink-0 pr-2 text-[11px] text-slate-500">{unit}</span> : null}
+      </span>
+    </label>
+  );
+}
+
+function FormatoClinicoCampos({ templateCode, datos, onChange, onAudiometriaChange, onParametroChange, disabled }) {
+  const safeDatos = datos && typeof datos === "object" ? datos : {};
+  const field = (key, label, options = {}) => <CampoClinico key={key} label={label} value={safeDatos[key]} onChange={(value) => onChange(key, value)} disabled={disabled} {...options} />;
+
+  if (templateCode === "triaje_clinico") {
+    return (
+      <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
+        <h4 className="text-sm font-semibold text-slate-800">Signos vitales y antropometria</h4>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {field("presion_sistolica", "Presion sistolica", { type: "number", unit: "mmHg" })}
+          {field("presion_diastolica", "Presion diastolica", { type: "number", unit: "mmHg" })}
+          {field("frecuencia_cardiaca", "Frecuencia cardiaca", { type: "number", unit: "lpm" })}
+          {field("frecuencia_respiratoria", "Frecuencia respiratoria", { type: "number", unit: "rpm" })}
+          {field("temperatura", "Temperatura", { type: "number", unit: "°C" })}
+          {field("saturacion_oxigeno", "Saturacion de oxigeno", { type: "number", unit: "%" })}
+          {field("peso_kg", "Peso", { type: "number", unit: "kg" })}
+          {field("talla_cm", "Talla", { type: "number", unit: "cm" })}
+          <CampoClinico label="IMC" value={safeDatos.imc} onChange={() => {}} unit="kg/m2" disabled />
+        </div>
+        {field("observaciones", "Observaciones", { multiline: true })}
+      </div>
+    );
+  }
+
+  if (templateCode === "audiometria_basica") {
+    const frequencies = ["500", "1000", "2000", "3000", "4000", "6000", "8000"];
+    return (
+      <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
+        <h4 className="text-sm font-semibold text-slate-800">Umbrales audiometricos</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[680px] border-collapse text-xs">
+            <thead><tr><th className="border border-slate-300 bg-slate-100 p-2 text-left">Oido</th>{frequencies.map((frequency) => <th key={frequency} className="border border-slate-300 bg-slate-100 p-2 text-center">{frequency} Hz</th>)}</tr></thead>
+            <tbody>{[["od", "Derecho"], ["oi", "Izquierdo"]].map(([ear, label]) => <tr key={ear}><th className="border border-slate-300 p-2 text-left">{label}</th>{frequencies.map((frequency) => <td key={frequency} className="border border-slate-300 p-1"><input type="number" className="w-full min-w-16 rounded border border-slate-200 px-1 py-1 text-center" value={safeDatos[ear]?.[frequency] ?? ""} onChange={(event) => onAudiometriaChange(ear, frequency, event.target.value)} disabled={disabled} /></td>)}</tr>)}</tbody>
+          </table>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{field("otoscopia_od", "Otoscopia OD")}{field("otoscopia_oi", "Otoscopia OI")}</div>
+        {field("impresion", "Impresion audiometrica", { multiline: true })}
+        {field("recomendaciones", "Recomendaciones", { multiline: true })}
+      </div>
+    );
+  }
+
+  if (templateCode === "lab_basico") {
+    const parametros = Array.isArray(safeDatos.parametros) ? safeDatos.parametros : [];
+    return <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3"><h4 className="text-sm font-semibold text-slate-800">Resultados de laboratorio</h4><div className="space-y-2">{parametros.map((parametro, index) => <div key={`${parametro.nombre || "parametro"}-${index}`} className="grid grid-cols-1 gap-2 rounded border border-slate-200 bg-white p-2 sm:grid-cols-3"><CampoClinico label="Parametro" value={parametro.nombre} onChange={(value) => onParametroChange(index, "nombre", value)} disabled={disabled} /><CampoClinico label="Valor" value={parametro.valor} onChange={(value) => onParametroChange(index, "valor", value)} disabled={disabled} /><CampoClinico label="Referencia" value={parametro.referencia} onChange={(value) => onParametroChange(index, "referencia", value)} disabled={disabled} /></div>)}</div>{field("hallazgos", "Hallazgos", { multiline: true })}{field("conclusion", "Conclusion", { multiline: true })}{field("recomendaciones", "Recomendaciones", { multiline: true })}</div>;
+  }
+
+  const camposPorTemplate = templateCode === "evaluacion_medica_ocupacional"
+    ? [["motivo_evaluacion", "Motivo de evaluacion"], ["antecedentes_ocupacionales", "Antecedentes ocupacionales"], ["antecedentes_personales", "Antecedentes personales"], ["anamnesis", "Anamnesis"], ["examen_fisico", "Examen fisico"], ["diagnostico", "Diagnostico"], ["conclusion", "Conclusion"], ["recomendaciones", "Recomendaciones"]]
+    : templateCode === "oftalmologia_basica"
+      ? [["agudeza_visual_od", "Agudeza visual OD"], ["agudeza_visual_oi", "Agudeza visual OI"], ["vision_colores", "Vision de colores"], ["impresion", "Impresion oftalmologica"], ["recomendaciones", "Recomendaciones"]]
+      : templateCode === "ekg_basico"
+        ? [["ritmo", "Ritmo"], ["frecuencia", "Frecuencia"], ["eje", "Eje"], ["hallazgos", "Hallazgos"], ["conclusion", "Conclusion"]]
+        : templateCode === "psicologia_basica"
+          ? [["hallazgos", "Hallazgos"], ["diagnostico", "Diagnostico"], ["conclusion", "Conclusion"], ["recomendaciones", "Recomendaciones"]]
+          : [["motivo", "Motivo"], ["hallazgos", "Hallazgos"], ["conclusion", "Conclusion"], ["recomendaciones", "Recomendaciones"]];
+
+  return <div className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-3 md:grid-cols-2">{camposPorTemplate.map(([key, label]) => field(key, label, { multiline: true }))}</div>;
+}
+
+const RESULTADO_PDF_LABELS = {
+  motivo: "Motivo",
+  motivo_evaluacion: "Motivo de evaluacion",
+  antecedentes_ocupacionales: "Antecedentes ocupacionales",
+  antecedentes_personales: "Antecedentes personales",
+  anamnesis: "Anamnesis",
+  examen_fisico: "Examen fisico",
+  diagnostico: "Diagnostico",
+  hallazgos: "Hallazgos",
+  conclusion: "Conclusion",
+  recomendaciones: "Recomendaciones",
+  observaciones: "Observaciones",
+  agudeza_visual_od: "Agudeza visual OD",
+  agudeza_visual_oi: "Agudeza visual OI",
+  vision_colores: "Vision de colores",
+  impresion: "Impresion",
+  ritmo: "Ritmo",
+  frecuencia: "Frecuencia",
+  eje: "Eje",
+};
+
+function buildResultadoPdfTables(templateCode, datos) {
+  const safeDatos = datos && typeof datos === "object" ? datos : {};
+  if (templateCode === "triaje_clinico") {
+    return [{
+      title: "Signos vitales y antropometria",
+      head: [["Parametro", "Resultado", "Unidad"]],
+      body: [
+        ["Presion sistolica", safeDatos.presion_sistolica || "-", "mmHg"],
+        ["Presion diastolica", safeDatos.presion_diastolica || "-", "mmHg"],
+        ["Frecuencia cardiaca", safeDatos.frecuencia_cardiaca || "-", "lpm"],
+        ["Frecuencia respiratoria", safeDatos.frecuencia_respiratoria || "-", "rpm"],
+        ["Temperatura", safeDatos.temperatura || "-", "°C"],
+        ["Saturacion de oxigeno", safeDatos.saturacion_oxigeno || "-", "%"],
+        ["Peso", safeDatos.peso_kg || "-", "kg"],
+        ["Talla", safeDatos.talla_cm || "-", "cm"],
+        ["IMC", safeDatos.imc || "-", "kg/m2"],
+        ["Observaciones", safeDatos.observaciones || "-", ""],
+      ],
+    }];
+  }
+
+  if (templateCode === "audiometria_basica") {
+    const frequencies = ["500", "1000", "2000", "3000", "4000", "6000", "8000"];
+    return [{
+      title: "Umbrales audiometricos (dB HL)",
+      head: [["Oido", ...frequencies.map((frequency) => `${frequency} Hz`)]],
+      body: [
+        ["Derecho", ...frequencies.map((frequency) => safeDatos.od?.[frequency] ?? "-")],
+        ["Izquierdo", ...frequencies.map((frequency) => safeDatos.oi?.[frequency] ?? "-")],
+      ],
+    }, {
+      title: "Evaluacion audiometrica",
+      head: [["Campo", "Resultado"]],
+      body: [
+        ["Otoscopia OD", safeDatos.otoscopia_od || "-"],
+        ["Otoscopia OI", safeDatos.otoscopia_oi || "-"],
+        ["Impresion audiometrica", safeDatos.impresion || "-"],
+        ["Recomendaciones", safeDatos.recomendaciones || "-"],
+      ],
+    }];
+  }
+
+  if (templateCode === "lab_basico") {
+    const parametros = Array.isArray(safeDatos.parametros) ? safeDatos.parametros : [];
+    return [{
+      title: "Resultados de laboratorio",
+      head: [["Parametro", "Resultado", "Referencia"]],
+      body: parametros.length > 0
+        ? parametros.map((parametro) => [parametro.nombre || "-", parametro.valor || "-", parametro.referencia || "-"])
+        : [["Sin parametros estructurados", "-", "-"]],
+    }, {
+      title: "Interpretacion",
+      head: [["Campo", "Resultado"]],
+      body: [["Hallazgos", safeDatos.hallazgos || "-"], ["Conclusion", safeDatos.conclusion || "-"], ["Recomendaciones", safeDatos.recomendaciones || "-"]],
+    }];
+  }
+
+  const rows = Object.entries(safeDatos)
+    .filter(([, value]) => !Array.isArray(value) && (value === null || typeof value !== "object"))
+    .map(([key, value]) => [RESULTADO_PDF_LABELS[key] || key.replaceAll("_", " "), String(value || "-")]);
+  return [{
+    title: "Resultado clinico",
+    head: [["Campo", "Resultado"]],
+    body: rows.length > 0 ? rows : [["Resultado", "Sin datos estructurados"]],
+  }];
 }
 
 export default function OrdenesOcupacionalesPage() {
@@ -226,9 +508,23 @@ export default function OrdenesOcupacionalesPage() {
   const [eventosFiltros, setEventosFiltros] = useState({ tipo: "", fechaDesde: "", fechaHasta: "" });
   const [eventosFiltrados, setEventosFiltrados] = useState([]);
   const [eventosLoading, setEventosLoading] = useState(false);
-  const [aptitudForm, setAptitudForm] = useState({ aptitud: "", restriccion: "", recomendacion: "", medico: "" });
+  const [aptitudForm, setAptitudForm] = useState({ aptitud: "", restriccion: "", recomendacion: "", medicoId: 0 });
   const [savingAptitud, setSavingAptitud] = useState(false);
   const [certificandoId, setCertificandoId] = useState(0);
+  const [interconsultas, setInterconsultas] = useState([]);
+  const [interconsultasLoading, setInterconsultasLoading] = useState(false);
+  const [interconsultasError, setInterconsultasError] = useState("");
+  const [interconsultaSavingKey, setInterconsultaSavingKey] = useState("");
+  const [interconsultaForm, setInterconsultaForm] = useState({
+    detalleId: 0,
+    especialidad: "",
+    motivo: "",
+    cie10: "",
+    diagnostico: "",
+    observaciones: "",
+  });
+  const [interconsultaRespuestaForms, setInterconsultaRespuestaForms] = useState({});
+  const [interconsultaLevantamientoForms, setInterconsultaLevantamientoForms] = useState({});
   const [historiaRows, setHistoriaRows] = useState([]);
   const [historiaLoading, setHistoriaLoading] = useState(false);
   const [historiaSaving, setHistoriaSaving] = useState(false);
@@ -241,9 +537,9 @@ export default function OrdenesOcupacionalesPage() {
     area_trabajo: "",
     tiempo_puesto_meses: "",
     observaciones: "",
-    antecedentes_laborales_json: "[]",
-    antecedentes_patologicos_json: "[]",
-    habitos_json: "[]",
+    antecedentes_laborales_json: [],
+    antecedentes_patologicos_json: [],
+    habitos_json: [],
   });
   const [clinicaConsolidada, setClinicaConsolidada] = useState(null);
   const [clinicaLoading, setClinicaLoading] = useState(false);
@@ -251,6 +547,7 @@ export default function OrdenesOcupacionalesPage() {
   const [formatoModalOpen, setFormatoModalOpen] = useState(false);
   const [formatoModalLoading, setFormatoModalLoading] = useState(false);
   const [formatoModalSaving, setFormatoModalSaving] = useState(false);
+  const [formatoPdfGenerating, setFormatoPdfGenerating] = useState(false);
   const [formatoModalError, setFormatoModalError] = useState("");
   const [formatoModalData, setFormatoModalData] = useState(null);
   const [formatoPlantillaSeleccionada, setFormatoPlantillaSeleccionada] = useState("0");
@@ -263,8 +560,10 @@ export default function OrdenesOcupacionalesPage() {
     formatoCodigo: "",
     estado: "borrador",
     observacion: "",
+    datos: {},
     datosJsonText: "{}",
   });
+  const trabajadoresRequestRef = useRef(0);
   const ordenesRequestRef = useRef(0);
   const resumenRequestRef = useRef(0);
   const medicoOrden = useMemo(
@@ -294,22 +593,14 @@ export default function OrdenesOcupacionalesPage() {
         if (cancelled) return;
 
         setEmpresas(empData || []);
-        if (!empresaId && (empData || []).length > 0) {
-          setEmpresaId(Number(empData[0].id));
-        }
+        setEmpresaId((currentId) => currentId || Number(empData?.[0]?.id || 0));
 
         setTipos(tipoData || []);
-        if (!tipoEvaluacionId && (tipoData || []).length > 0) {
-          setTipoEvaluacionId(Number(tipoData[0].id));
-        }
+        setTipoEvaluacionId((currentId) => currentId || Number(tipoData?.[0]?.id || 0));
 
-        const medicosActivos = (medicosData || []).filter(
-          (m) => String(m?.estado || "activo").toLowerCase() !== "inactivo"
-        );
-        setMedicosCrud(medicosActivos);
-        if (!medicoOrdenId && medicosActivos.length > 0) {
-          setMedicoOrdenId(Number(medicosActivos[0].id));
-        }
+        const medicosElegibles = (medicosData || []).filter(isMedicoCertificador);
+        setMedicosCrud(medicosElegibles);
+        setMedicoOrdenId((currentId) => currentId || Number(medicosElegibles[0]?.id || 0));
       } catch (err) {
         if (!cancelled) {
           setError(err.message || "No se pudo cargar catalogos iniciales");
@@ -321,7 +612,7 @@ export default function OrdenesOcupacionalesPage() {
     return () => {
       cancelled = true;
     };
-  }, [empresaId, medicoOrdenId, tipoEvaluacionId]);
+  }, []);
 
   useEffect(() => {
     if (!medicoOrden) return;
@@ -329,6 +620,7 @@ export default function OrdenesOcupacionalesPage() {
   }, [medicoOrden]);
 
   const cargarTrabajadores = useCallback(async () => {
+    const requestId = ++trabajadoresRequestRef.current;
     if (!empresaId) {
       setTrabajadores([]);
       setTrabajadorId(0);
@@ -346,14 +638,21 @@ export default function OrdenesOcupacionalesPage() {
       });
 
       const list = payload.data || [];
-      setTrabajadores(list);
-      if (!list.find((it) => Number(it.id) === Number(trabajadorId))) {
-        setTrabajadorId(list.length ? Number(list[0].id) : 0);
+      if (requestId !== trabajadoresRequestRef.current) {
+        return;
       }
+      setTrabajadores(list);
+      setTrabajadorId((currentId) => (
+        list.some((it) => Number(it.id) === Number(currentId))
+          ? currentId
+          : (list.length ? Number(list[0].id) : 0)
+      ));
     } catch (err) {
-      setError(err.message || "No se pudo cargar trabajadores");
+      if (requestId === trabajadoresRequestRef.current) {
+        setError(err.message || "No se pudo cargar trabajadores");
+      }
     }
-  }, [empresaId, trabajadorId]);
+  }, [empresaId]);
 
   const cargarProtocolos = useCallback(async () => {
     if (!empresaId) {
@@ -365,13 +664,15 @@ export default function OrdenesOcupacionalesPage() {
     try {
       const data = await listarProtocolosOcupacionales({ empresaId, estado: "activo" });
       setProtocolos(data || []);
-      if (!data.find((it) => Number(it.id) === Number(protocoloId))) {
-        setProtocoloId(data.length ? Number(data[0].id) : 0);
-      }
+      setProtocoloId((currentId) => (
+        data.some((it) => Number(it.id) === Number(currentId))
+          ? currentId
+          : (data.length ? Number(data[0].id) : 0)
+      ));
     } catch (err) {
       setError(err.message || "No se pudo cargar protocolos");
     }
-  }, [empresaId, protocoloId]);
+  }, [empresaId]);
 
   useEffect(() => {
     cargarTrabajadores();
@@ -478,6 +779,10 @@ export default function OrdenesOcupacionalesPage() {
       setError("Primero previsualice la orden");
       return;
     }
+    if (!medicoOrden) {
+      setError("Seleccione un medico responsable con CMP y firma");
+      return;
+    }
 
     setRegistrando(true);
     setError("");
@@ -493,6 +798,7 @@ export default function OrdenesOcupacionalesPage() {
         observacion,
         subcontrataEmpresaId,
         facturarEmpresaId,
+        medicoResponsableId: medicoOrden.id,
         firmaDoctor: firmaDoctorPayload,
         modo: modoOrden,
         gestante: gestanteOrden,
@@ -509,6 +815,42 @@ export default function OrdenesOcupacionalesPage() {
       setError(err.message || "No se pudo registrar la orden");
     } finally {
       setRegistrando(false);
+    }
+  };
+
+  const hydrateInterconsultas = (rowsInterconsultas) => {
+    const rowsValue = Array.isArray(rowsInterconsultas) ? rowsInterconsultas : [];
+    setInterconsultas(rowsValue);
+    const respuestas = {};
+    const levantamientos = {};
+    rowsValue.forEach((row) => {
+      respuestas[row.id] = {
+        especialista: row.especialista_nombre || "",
+        respuesta: row.respuesta || "",
+        archivo: null,
+      };
+      levantamientos[row.id] = {
+        levantamiento: row.levantamiento || "",
+        recomendacion: row.recomendacion || "",
+        resultado: row.resultado_levantamiento || "FAVORABLE",
+        medicoId: Number(row.medico_levantamiento_id || medicoOrdenId || medicosCrud[0]?.id || 0),
+      };
+    });
+    setInterconsultaRespuestaForms(respuestas);
+    setInterconsultaLevantamientoForms(levantamientos);
+  };
+
+  const recargarInterconsultas = async (ordenId) => {
+    setInterconsultasLoading(true);
+    setInterconsultasError("");
+    try {
+      const rowsInterconsultas = await listarInterconsultasOcupacionales(ordenId);
+      hydrateInterconsultas(rowsInterconsultas);
+    } catch (err) {
+      setInterconsultasError(err.message || "No se pudieron cargar interconsultas");
+      hydrateInterconsultas([]);
+    } finally {
+      setInterconsultasLoading(false);
     }
   };
 
@@ -531,11 +873,13 @@ export default function OrdenesOcupacionalesPage() {
       setDetalleForms(initialForms);
       setEventosFiltros({ tipo: "", fechaDesde: "", fechaHasta: "" });
       setEventosFiltrados(det.eventos || []);
+      setInterconsultaForm({ detalleId: 0, especialidad: "", motivo: "", cie10: "", diagnostico: "", observaciones: "" });
+      await recargarInterconsultas(ordenId);
       setAptitudForm({
         aptitud: det.aptitud_final || "",
         restriccion: det.restriccion_final || "",
         recomendacion: det.recomendacion_final || "",
-        medico: det.medico_responsable || "",
+        medicoId: Number(det.medico_responsable_id || resolveMedicoFromOrden(det, medicosCrud)?.id || 0),
       });
       setHistoriaEditingId(0);
       setHistoriaError("");
@@ -545,9 +889,9 @@ export default function OrdenesOcupacionalesPage() {
         area_trabajo: "",
         tiempo_puesto_meses: "",
         observaciones: "",
-        antecedentes_laborales_json: "[]",
-        antecedentes_patologicos_json: "[]",
-        habitos_json: "[]",
+        antecedentes_laborales_json: [],
+        antecedentes_patologicos_json: [],
+        habitos_json: [],
       });
       setHistoriaLoading(true);
       try {
@@ -592,11 +936,12 @@ export default function OrdenesOcupacionalesPage() {
     });
     setDetalleForms(nextForms);
     setEventosFiltrados(det.eventos || []);
+    await recargarInterconsultas(ordenId);
     setAptitudForm({
       aptitud: det.aptitud_final || "",
       restriccion: det.restriccion_final || "",
       recomendacion: det.recomendacion_final || "",
-      medico: det.medico_responsable || "",
+      medicoId: Number(det.medico_responsable_id || resolveMedicoFromOrden(det, medicosCrud)?.id || 0),
     });
     try {
       const historia = await listarHistoriaOcupacionalPorOrden(ordenId);
@@ -647,6 +992,7 @@ export default function OrdenesOcupacionalesPage() {
       formatoCodigo: String(item.examen_codigo || "formato_general").toLowerCase(),
       estado: "borrador",
       observacion: String(item.observacion_ejecucion || ""),
+      datos: {},
       datosJsonText: "{}",
     });
 
@@ -676,6 +1022,7 @@ export default function OrdenesOcupacionalesPage() {
         formatoCodigo: String(data?.formato_codigo || detalle.formato_codigo || item.examen_codigo || "formato_general").toLowerCase(),
         estado: String(data?.estado || "borrador"),
         observacion: String(data?.observacion || item.observacion_ejecucion || ""),
+        datos: datosJsonInicial,
         datosJsonText,
       });
     } catch (err) {
@@ -691,7 +1038,7 @@ export default function OrdenesOcupacionalesPage() {
       setFormatoModalError("No hay plantilla sugerida para este examen");
       return;
     }
-    setFormatoForm((prev) => ({ ...prev, datosJsonText: prettyJsonInput(plantilla) }));
+    setFormatoForm((prev) => ({ ...prev, datos: plantilla, datosJsonText: prettyJsonInput(plantilla) }));
     setFormatoModalError("");
   };
 
@@ -702,19 +1049,14 @@ export default function OrdenesOcupacionalesPage() {
       setFormatoModalError("Seleccione una plantilla valida");
       return;
     }
-    setFormatoForm((prev) => ({ ...prev, datosJsonText: prettyJsonInput(selected.datos_json) }));
+    setFormatoForm((prev) => ({ ...prev, datos: selected.datos_json, datosJsonText: prettyJsonInput(selected.datos_json) }));
     setFormatoModalError("");
   };
 
   const onGuardarPlantillaCatalogo = async () => {
-    let parsedDatos = {};
-    try {
-      parsedDatos = JSON.parse(String(formatoForm.datosJsonText || "{}").trim() || "{}");
-      if (parsedDatos === null || typeof parsedDatos !== "object" || Array.isArray(parsedDatos)) {
-        throw new Error("El JSON del formato debe ser un objeto para guardarlo como plantilla");
-      }
-    } catch (err) {
-      setFormatoModalError(err.message || "JSON invalido para plantilla");
+    const parsedDatos = formatoForm.datos;
+    if (!parsedDatos || typeof parsedDatos !== "object" || Array.isArray(parsedDatos)) {
+      setFormatoModalError("Los datos del formato son invalidos para guardarlos como plantilla");
       return;
     }
 
@@ -795,14 +1137,9 @@ export default function OrdenesOcupacionalesPage() {
       return;
     }
 
-    let parsedDatos = {};
-    try {
-      parsedDatos = JSON.parse(String(formatoForm.datosJsonText || "{}").trim() || "{}");
-      if (parsedDatos === null || typeof parsedDatos !== "object" || Array.isArray(parsedDatos)) {
-        throw new Error("datos_json debe ser un objeto JSON");
-      }
-    } catch (err) {
-      setFormatoModalError(err.message || "JSON invalido en datos clinicos");
+    const parsedDatos = formatoForm.datos;
+    if (!parsedDatos || typeof parsedDatos !== "object" || Array.isArray(parsedDatos)) {
+      setFormatoModalError("Los datos clinicos son invalidos");
       return;
     }
 
@@ -827,6 +1164,184 @@ export default function OrdenesOcupacionalesPage() {
     } finally {
       setFormatoModalSaving(false);
     }
+  };
+
+  const onDescargarFormatoClinicoPdf = async () => {
+    if (!formatoForm.ordenDetalleId || !detalleModalData?.id) return;
+
+    setFormatoPdfGenerating(true);
+    setFormatoModalError("");
+    try {
+      const [resultadoPersistido, orden, configuracionClinica, jsPDFModule, autoTableModule] = await Promise.all([
+        obtenerResultadoClinicoOcupacional({
+          ordenDetalleId: formatoForm.ordenDetalleId,
+          formatoCodigo: formatoForm.formatoCodigo,
+        }),
+        obtenerDetalleOrdenOcupacional(detalleModalData.id),
+        fetchConfiguracionClinica(),
+        import("jspdf"),
+        import("jspdf-autotable"),
+      ]);
+      const resultado = resultadoPersistido?.data;
+      if (!resultado || String(resultado.estado || "") !== "finalizado") {
+        throw new Error("Solo se puede generar el PDF de un resultado clinico finalizado");
+      }
+
+      const templateCode = String(resultadoPersistido?.detalle?.template_code || "general_basico");
+      const datos = resultado.datos_json && typeof resultado.datos_json === "object" ? resultado.datos_json : {};
+      const jsPDF = jsPDFModule.default;
+      const autoTable = autoTableModule.default;
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_url || "");
+      const firmaRaw = String(orden.medico_firma_snapshot || "").trim();
+      const firmaUrl = /^(data:|https?:\/\/|blob:|uploads\/|\/uploads\/)/i.test(firmaRaw) ? resolveAssetUrl(firmaRaw) : "";
+      const [logoDataUrl, firmaDataUrl] = await Promise.all([
+        logoUrl ? loadImageAsDataUrl(logoUrl).catch(() => "") : Promise.resolve(""),
+        firmaUrl ? loadImageAsDataUrl(firmaUrl).catch(() => "") : Promise.resolve(""),
+      ]);
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.5);
+      doc.rect(8, 8, 194, 281);
+      if (logoDataUrl) {
+        doc.addImage(logoDataUrl, inferDataUrlImageFormat(logoDataUrl), 12, 12, 22, 22);
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text(String(configuracionClinica?.nombre_clinica || "CLINICA 2 DE MAYO"), 40, 18);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(`RUC: ${String(configuracionClinica?.ruc || "-")}`, 40, 23);
+      doc.text(`Direccion: ${String(configuracionClinica?.direccion || "-")}`, 40, 27);
+      doc.text(`Telefono: ${String(configuracionClinica?.telefono || "-")}`, 40, 31);
+      doc.line(12, 38, 198, 38);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("RESULTADO CLINICO OCUPACIONAL", 105, 47, { align: "center" });
+      doc.setFontSize(11);
+      doc.text(`${formatoForm.examenCodigo} - ${formatoForm.examenDescripcion}`, 105, 54, { align: "center" });
+
+      autoTable(doc, {
+        startY: 60,
+        theme: "grid",
+        margin: { left: 12, right: 12 },
+        styles: { fontSize: 8.5, cellPadding: 1.8, textColor: [17, 24, 39] },
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+        head: [["Datos del trabajador", "", "Orden", ""]],
+        body: [[
+          "Trabajador", String(orden.paciente_nombre_completo || "-"),
+          "Codigo", String(orden.codigo || "-"),
+        ], [
+          "Documento", String(orden.documento_numero || "-"),
+          "Fecha", String(orden.fecha_orden || "-"),
+        ], [
+          "Empresa", String(orden.empresa || "-"),
+          "Tipo", `${String(orden.tipo_codigo || "")} ${String(orden.tipo_nombre || "")}`.trim() || "-",
+        ], [
+          "Puesto", String(orden.puesto_trabajo || "-"),
+          "Protocolo", String(orden.protocolo_descripcion || "-"),
+        ]],
+        columnStyles: { 0: { fontStyle: "bold", cellWidth: 25 }, 1: { cellWidth: 64 }, 2: { fontStyle: "bold", cellWidth: 22 }, 3: { cellWidth: 75 } },
+      });
+
+      let nextY = (doc.lastAutoTable?.finalY || 94) + 8;
+      buildResultadoPdfTables(templateCode, datos).forEach((table) => {
+        if (nextY > 245) {
+          doc.addPage();
+          nextY = 18;
+        }
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10.5);
+        doc.text(table.title, 12, nextY);
+        autoTable(doc, {
+          startY: nextY + 3,
+          theme: "grid",
+          margin: { left: 12, right: 12 },
+          styles: { fontSize: 8.5, cellPadding: 1.8, overflow: "linebreak" },
+          headStyles: { fillColor: [14, 116, 144], textColor: [255, 255, 255] },
+          head: table.head,
+          body: table.body,
+        });
+        nextY = (doc.lastAutoTable?.finalY || nextY + 10) + 8;
+      });
+
+      if (nextY > 238) {
+        doc.addPage();
+        nextY = 28;
+      }
+      if (firmaDataUrl) {
+        doc.addImage(firmaDataUrl, inferDataUrlImageFormat(firmaDataUrl), 142, nextY, 40, 16);
+      }
+      doc.setDrawColor(100, 116, 139);
+      doc.line(126, nextY + 18, 196, nextY + 18);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("MEDICO RESPONSABLE", 161, nextY + 23, { align: "center" });
+      doc.setFont("helvetica", "normal");
+      const medicoNombre = String(orden.medico_nombre_snapshot || "No consignado");
+      doc.text(medicoNombre, 161, nextY + 28, { align: "center" });
+      const cmp = String(orden.medico_cmp_snapshot || "").trim();
+      const rne = String(orden.medico_rne_snapshot || "").trim();
+      const rna = String(orden.medico_rna_snapshot || "").trim();
+      doc.setFontSize(8);
+      if (cmp) doc.text(`CMP: ${cmp}`, 161, nextY + 32, { align: "center" });
+      if (rne) doc.text(`RNE: ${rne}`, 161, nextY + 36, { align: "center" });
+      if (rna) doc.text(`RNA: ${rna}`, 161, nextY + 40, { align: "center" });
+
+      const pageCount = doc.getNumberOfPages();
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+        doc.setPage(pageNumber);
+        doc.setFontSize(7.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`Resultado finalizado: ${String(resultado.updated_at || "-")}`, 12, 284);
+        doc.text(`Pagina ${pageNumber} de ${pageCount}`, 198, 284, { align: "right" });
+      }
+
+      const safeOrder = String(orden.codigo || `orden_${detalleModalData.id}`).replace(/[^A-Za-z0-9_-]/g, "_");
+      const safeExam = String(formatoForm.examenCodigo || "resultado").replace(/[^A-Za-z0-9_-]/g, "_");
+      await registrarEmisionPdfResultadoClinicoOcupacional({
+        ordenDetalleId: formatoForm.ordenDetalleId,
+        formatoCodigo: formatoForm.formatoCodigo,
+      });
+      doc.save(`resultado_${safeOrder}_${safeExam}.pdf`);
+      setMessage(`PDF clinico generado: ${safeExam}`);
+    } catch (err) {
+      setFormatoModalError(err.message || "No se pudo generar el PDF clinico");
+    } finally {
+      setFormatoPdfGenerating(false);
+    }
+  };
+
+  const onFormatoDatoChange = (key, value) => {
+    setFormatoForm((prev) => {
+      const nextDatos = { ...(prev.datos || {}), [key]: value };
+      if (key === "peso_kg" || key === "talla_cm") {
+        const peso = Number(key === "peso_kg" ? value : nextDatos.peso_kg);
+        const tallaCm = Number(key === "talla_cm" ? value : nextDatos.talla_cm);
+        nextDatos.imc = peso > 0 && tallaCm > 0 ? (peso / ((tallaCm / 100) ** 2)).toFixed(2) : "";
+      }
+      return { ...prev, datos: nextDatos, datosJsonText: prettyJsonInput(nextDatos) };
+    });
+  };
+
+  const onFormatoAudiometriaChange = (oido, frecuencia, value) => {
+    setFormatoForm((prev) => {
+      const currentDatos = prev.datos || {};
+      const nextDatos = {
+        ...currentDatos,
+        [oido]: { ...(currentDatos[oido] || {}), [frecuencia]: value },
+      };
+      return { ...prev, datos: nextDatos, datosJsonText: prettyJsonInput(nextDatos) };
+    });
+  };
+
+  const onFormatoParametroChange = (index, key, value) => {
+    setFormatoForm((prev) => {
+      const nextParametros = Array.isArray(prev.datos?.parametros)
+        ? prev.datos.parametros.map((parametro, currentIndex) => currentIndex === index ? { ...parametro, [key]: value } : parametro)
+        : [];
+      const nextDatos = { ...(prev.datos || {}), parametros: nextParametros };
+      return { ...prev, datos: nextDatos, datosJsonText: prettyJsonInput(nextDatos) };
+    });
   };
 
   const exportHistoriaClinicaPdf = async () => {
@@ -862,6 +1377,7 @@ export default function OrdenesOcupacionalesPage() {
         ["Total examenes", String(resumenClin.total_items || 0)],
         ["Completados", String(resumenClin.total_completados || 0)],
         ["Observados", String(resumenClin.total_observados || 0)],
+        ["Interconsultas abiertas", String(resumenClin.interconsultas_abiertas || 0)],
         ["Pendientes", String(resumenClin.total_pendientes || 0)],
         ["Avance", `${resumenClin.porcentaje_avance || 0}%`],
         ["Historias registradas", String(resumenClin.historias_registradas || 0)],
@@ -924,9 +1440,9 @@ export default function OrdenesOcupacionalesPage() {
       area_trabajo: row.area_trabajo || "",
       tiempo_puesto_meses: row.tiempo_puesto_meses ?? "",
       observaciones: row.observaciones || "",
-      antecedentes_laborales_json: prettyJsonInput(row.antecedentes_laborales_json),
-      antecedentes_patologicos_json: prettyJsonInput(row.antecedentes_patologicos_json),
-      habitos_json: prettyJsonInput(row.habitos_json),
+      antecedentes_laborales_json: normalizeHistoriaList(row.antecedentes_laborales_json),
+      antecedentes_patologicos_json: normalizeHistoriaList(row.antecedentes_patologicos_json),
+      habitos_json: normalizeHistoriaList(row.habitos_json),
     });
   };
 
@@ -939,9 +1455,9 @@ export default function OrdenesOcupacionalesPage() {
       area_trabajo: "",
       tiempo_puesto_meses: "",
       observaciones: "",
-      antecedentes_laborales_json: "[]",
-      antecedentes_patologicos_json: "[]",
-      habitos_json: "[]",
+      antecedentes_laborales_json: [],
+      antecedentes_patologicos_json: [],
+      habitos_json: [],
     });
   };
 
@@ -989,21 +1505,33 @@ export default function OrdenesOcupacionalesPage() {
       setDetalleModalError("Seleccione aptitud final");
       return;
     }
+    if (Number(aptitudForm.medicoId || 0) <= 0) {
+      setDetalleModalError("Seleccione el medico responsable");
+      return;
+    }
+    if (aptitudForm.aptitud === "APTO_CON_RESTRICCIONES" && !String(aptitudForm.restriccion || "").trim()) {
+      setDetalleModalError("Ingrese las restricciones para la aptitud seleccionada");
+      return;
+    }
     setSavingAptitud(true);
     setDetalleModalError("");
     setError("");
     setMessage("");
     try {
-      await guardarAptitudOrdenOcupacional({
+      const aptitudGuardada = await guardarAptitudOrdenOcupacional({
         id: detalleModalData.id,
         aptitudFinal: aptitudForm.aptitud,
         restriccionFinal: aptitudForm.restriccion,
         recomendacionFinal: aptitudForm.recomendacion,
-        medicoResponsable: aptitudForm.medico,
+        medicoResponsableId: aptitudForm.medicoId,
       });
       await recargarDetalleModal(detalleModalData.id);
       await recargarListadoYResumen();
-      setMessage(`Aptitud final guardada: ${aptitudForm.aptitud}`);
+      setMessage(
+        aptitudGuardada?.cerrada_al_guardar_aptitud
+          ? `Aptitud final guardada y orden cerrada: ${aptitudForm.aptitud}`
+          : `Aptitud final guardada: ${aptitudForm.aptitud}`
+      );
     } catch (err) {
       setDetalleModalError(err.message || "No se pudo guardar aptitud final");
     } finally {
@@ -1024,187 +1552,220 @@ export default function OrdenesOcupacionalesPage() {
         throw new Error("Debe registrar aptitud final antes de emitir certificado");
       }
 
-      const [jsPDFModule, autoTableModule, configuracionClinica] = await Promise.all([
+      const [jsPDFModule, configuracionClinica] = await Promise.all([
         import("jspdf"),
-        import("jspdf-autotable"),
         fetchConfiguracionClinica(),
       ]);
       const jsPDF = jsPDFModule.default;
-      const autoTable = autoTableModule.default;
       const doc = new jsPDF({ unit: "mm", format: "a4" });
 
-      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_url || "");
-      const medicoOrdenCrud = resolveMedicoFromOrden(det, medicosCrud);
-      const firmaOrden = String(medicoOrdenCrud?.firma || det.firma_doctor || "").trim();
+      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_ocupacional_url || configuracionClinica?.logo_url || "");
+      const logoSelloUrl = resolveAssetUrl(configuracionClinica?.logo_url || "");
+      const firmaOrden = String(det.medico_firma_snapshot || "").trim();
       const firmaRaw = firmaOrden;
       const firmaUrl = /^(data:|https?:\/\/|blob:|uploads\/|\/uploads\/)/i.test(firmaRaw)
         ? resolveAssetUrl(firmaRaw)
         : "";
 
-      const [logoDataUrl, firmaDataUrl] = await Promise.all([
+      const [logoDataUrl, firmaDataUrl, logoSelloDataUrl] = await Promise.all([
         logoUrl ? loadImageAsDataUrl(logoUrl).catch(() => "") : Promise.resolve(""),
         firmaUrl ? loadImageAsDataUrl(firmaUrl).catch(() => "") : Promise.resolve(""),
+        logoSelloUrl ? loadImageAsDataUrl(logoSelloUrl).catch(() => "") : Promise.resolve(""),
       ]);
+      const logoDocumentoDataUrl = logoDataUrl
+        ? await cropImageWhitespaceDataUrl(logoDataUrl).catch(() => logoDataUrl)
+        : "";
+      const logoSelloDocumentoDataUrl = logoSelloDataUrl
+        ? await cropImageWhitespaceDataUrl(logoSelloDataUrl).catch(() => logoSelloDataUrl)
+        : "";
 
-      const fechaEmision = new Date();
-      const fechaEmisionTexto = fechaEmision.toLocaleString("es-PE", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+      const fechaEmisionActual = new Date();
+      const fechaEmisionTexto = [
+        String(fechaEmisionActual.getDate()).padStart(2, "0"),
+        String(fechaEmisionActual.getMonth() + 1).padStart(2, "0"),
+        String(fechaEmisionActual.getFullYear()),
+      ].join("-");
+      const medicoFirmaNombre = String(
+        det.medico_nombre_snapshot
+        || det.medico_responsable
+        || "No consignado"
+      );
+      const especialidad = String(det.medico_especialidad_snapshot || "MEDICINA OCUPACIONAL").trim();
+      const cmp = String(det.medico_cmp_snapshot || "").trim();
+      const rne = String(det.medico_rne_snapshot || "").trim();
+      const medicoActual = medicosCrud.find((medico) => Number(medico.id) === Number(det.medico_responsable_id)) || null;
+      const rna = String(
+        det.medico_rna_snapshot
+        || det.medico_rna_vigente
+        || medicoActual?.rna
+        || ""
+      ).trim();
+      const tipoCodigo = String(det.tipo_codigo || "").trim().toUpperCase();
+      const aptitud = String(det.aptitud_final || "").trim().toUpperCase();
+      const fechaEvaluacion = String(det.fecha_orden || "-").split("-").reverse().join("-");
+      const sexo = String(det.paciente_sexo || "-").trim().toUpperCase();
+      const edad = det.paciente_edad === null || det.paciente_edad === undefined ? "-" : String(det.paciente_edad);
+      const x = 16;
+      const width = 178;
+      const drawCell = (cellX, cellY, cellWidth, cellHeight, text, options = {}) => {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.25);
+        doc.rect(cellX, cellY, cellWidth, cellHeight);
+        doc.setFont("times", options.bold ? "bold" : "normal");
+        doc.setFontSize(options.fontSize || 9);
+        doc.setTextColor(0, 0, 0);
+        const lines = doc.splitTextToSize(String(text || ""), Math.max(4, cellWidth - 3));
+        const lineHeight = (options.fontSize || 9) * 0.38;
+        const textHeight = lines.length * lineHeight;
+        const textY = cellY + Math.max(3.2, (cellHeight - textHeight) / 2 + lineHeight * 0.78);
+        const textX = options.center ? cellX + cellWidth / 2 : cellX + 1.5;
+        doc.text(lines, textX, textY, { align: options.center ? "center" : "left" });
+      };
+      const mark = (selected) => selected ? "X" : "";
 
-      doc.setDrawColor(15, 23, 42);
-      doc.setLineWidth(0.6);
-      doc.rect(8, 8, 194, 281);
+      doc.setDrawColor(147, 197, 253);
+      doc.setLineWidth(0.8);
+      doc.rect(10, 8, 190, 281);
+      doc.setLineWidth(0.35);
+      doc.rect(12, 10, 186, 277);
 
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(54);
-      doc.setTextColor(235, 238, 242);
-      doc.text("OCUPACIONAL", 105, 165, { align: "center", angle: 35 });
-      doc.setTextColor(17, 24, 39);
-
-      if (logoDataUrl) {
-        const logoType = inferDataUrlImageFormat(logoDataUrl);
-        doc.addImage(logoDataUrl, logoType, 12, 12, 24, 24);
+      if (logoDocumentoDataUrl) {
+        const properties = doc.getImageProperties(logoDocumentoDataUrl);
+        const ratio = properties.width / properties.height;
+        const logoWidth = Math.min(125, 27 * ratio);
+        const logoHeight = logoWidth / ratio;
+        doc.addImage(
+          logoDocumentoDataUrl,
+          inferDataUrlImageFormat(logoDocumentoDataUrl),
+          105 - logoWidth / 2,
+          12 + (27 - logoHeight) / 2,
+          logoWidth,
+          logoHeight
+        );
+      } else {
+        doc.setFont("times", "bold");
+        doc.setFontSize(18);
+        doc.text(String(configuracionClinica?.nombre_clinica || "CLINICA 2 DE MAYO"), 105, 25, { align: "center" });
       }
 
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
-      doc.text(String(configuracionClinica?.nombre_clinica || "CLINICA 2 DE MAYO"), 40, 19);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9.5);
-      doc.text(`RUC: ${String(configuracionClinica?.ruc || "-")}`, 40, 24);
-      doc.text(`Direccion: ${String(configuracionClinica?.direccion || "-")}`, 40, 28);
-      doc.text(`Telefono: ${String(configuracionClinica?.telefono || "-")}`, 40, 32);
+      doc.setFont("times", "bold");
+      doc.setFontSize(11);
+      doc.text("CERTIFICADO MEDICO OCUPACIONAL", 105, 43, { align: "center" });
 
-      doc.setDrawColor(148, 163, 184);
-      doc.setLineWidth(0.3);
-      doc.line(12, 38, 198, 38);
+      let y = 47;
+      drawCell(x, y, width, 14, "CERTIFICA que el Sr. (a):", { bold: true, center: true, fontSize: 10 });
+      y += 14;
+      drawCell(x, y, 52, 14, "APELLIDOS Y NOMBRES", { bold: true });
+      drawCell(x + 52, y, 126, 14, String(det.paciente_nombre_completo || "-"), { fontSize: 9.5 });
+      y += 14;
 
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(17);
-      doc.text("CERTIFICADO DE APTITUD OCUPACIONAL", 105, 48, { align: "center" });
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text(`Emitido: ${fechaEmisionTexto}`, 198, 54, { align: "right" });
+      drawCell(x, y, 52, 10, "TIPO DE EVALUACION", { bold: true, fontSize: 8.2 });
+      drawCell(x + 52, y, 42, 10, `OCUPACIONAL     ${mark(tipoCodigo === "PRE")}`, { center: true, fontSize: 8.4 });
+      drawCell(x + 94, y, 42, 10, `PERIODICO     ${mark(tipoCodigo === "PER")}`, { center: true, fontSize: 8.4 });
+      drawCell(x + 136, y, 42, 10, `RETIRO     ${mark(tipoCodigo === "POST")}`, { center: true, fontSize: 8.4 });
+      y += 10;
 
-      autoTable(doc, {
-        startY: 58,
-        theme: "grid",
-        margin: { left: 12, right: 12 },
-        tableWidth: 186,
-        styles: { fontSize: 9.5, cellPadding: 2.1, textColor: [17, 24, 39], valign: "middle" },
-        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: "bold" },
-        columnStyles: {
-          0: { cellWidth: 34, fontStyle: "bold" },
-          1: { cellWidth: 59 },
-          2: { cellWidth: 29, fontStyle: "bold" },
-          3: { cellWidth: 64 },
-        },
-        head: [["Datos paciente", "", "Orden", ""]],
-        body: [[
-          "Nombres y apellidos",
-          String(det.paciente_nombre_completo || "-"),
-          "HC",
-          String(det.paciente_historia_clinica || "-"),
-        ], [
-          "Documento",
-          String(det.documento_numero || "-"),
-          "Codigo",
-          String(det.codigo || "-"),
-        ], [
-          "Empresa",
-          String(det.empresa || "-"),
-          "Fecha orden",
-          String(det.fecha_orden || "-"),
-        ], [
-          "Puesto",
-          String(det.puesto_trabajo || "-"),
-          "Tipo eval.",
-          `${String(det.tipo_codigo || "")} ${String(det.tipo_nombre || "")}`.trim() || "-",
-        ], [
-          "Protocolo",
-          String(det.protocolo_descripcion || "-"),
-          "Estado orden",
-          String(det.estado || "-"),
-        ]],
-      });
+      drawCell(x, y, 52, 9, "DOCUMENTO DE IDENTIDAD", { bold: true, fontSize: 7.8 });
+      drawCell(x + 52, y, 48, 9, String(det.documento_numero || "-"), { center: true });
+      drawCell(x + 100, y, 20, 9, "EDAD", { bold: true, center: true });
+      drawCell(x + 120, y, 22, 9, `${edad} años`, { center: true });
+      drawCell(x + 142, y, 18, 9, "SEXO", { bold: true, center: true });
+      drawCell(x + 160, y, 18, 9, sexo, { center: true });
+      y += 9;
 
-      const aptitudY = (doc.lastAutoTable?.finalY || 96) + 8;
-      doc.setDrawColor(30, 41, 59);
-      doc.setFillColor(248, 250, 252);
-      doc.rect(12, aptitudY, 186, 34, "FD");
+      drawCell(x, y, 52, 9, "PUESTO AL QUE POSTULA O TRABAJA", { bold: true, fontSize: 7.2 });
+      drawCell(x + 52, y, 126, 9, String(det.puesto_trabajo || "-"));
+      y += 9;
+      drawCell(x, y, 52, 9, "OCUPACION ACTUAL O ULTIMA OCUPACION", { bold: true, fontSize: 6.8 });
+      drawCell(x + 52, y, 126, 9, String(det.puesto_trabajo || "-"));
+      y += 9;
 
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(13);
-      doc.text(`APTITUD FINAL: ${String(det.aptitud_final || "-").toUpperCase()}`, 16, aptitudY + 8);
+      drawCell(x, y, 52, 14, "HISTORIA CLINICA", { bold: true, center: true });
+      drawCell(x + 52, y, 44, 14, String(det.paciente_historia_clinica || "-"), { center: true });
+      drawCell(x + 96, y, 44, 14, "FECHA DE EVALUACION", { bold: true, center: true });
+      drawCell(x + 140, y, 38, 14, fechaEvaluacion, { center: true });
+      y += 14;
 
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      const restricciones = doc.splitTextToSize(`Restricciones: ${String(det.restriccion_final || "Ninguna")}`, 178);
-      const recomendaciones = doc.splitTextToSize(`Recomendaciones: ${String(det.recomendacion_final || "Ninguna")}`, 178);
-      doc.text(restricciones, 16, aptitudY + 15);
-      doc.text(recomendaciones, 16, aptitudY + 23);
+      drawCell(x, y, 42, 14, "EMPRESA", { bold: true, center: true });
+      drawCell(x + 42, y, 136, 14, String(det.empresa || "-"), { fontSize: 9 });
+      y += 14;
+      drawCell(x, y, width, 14, `Conclusion segun protocolo ${String(det.protocolo_descripcion || "-")} estipulado`, { center: true, fontSize: 9 });
+      y += 14;
 
-      const declaracionY = aptitudY + 44;
-      const declaracion =
-        "El presente certificado acredita la aptitud ocupacional del trabajador en base a la evaluacion clinica y el cierre formal de la orden ocupacional.";
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10.2);
-      doc.text(doc.splitTextToSize(declaracion, 184), 12, declaracionY);
+      const aptitudeLabelWidth = 55;
+      const aptitudeMarkWidth = 26;
+      const restrictionsWidth = width - aptitudeLabelWidth - aptitudeMarkWidth;
+      drawCell(x, y, aptitudeLabelWidth, 16, "APTO\n(para el puesto en el que trabaja o postula)", { bold: true, fontSize: 7.5 });
+      drawCell(x + aptitudeLabelWidth, y, aptitudeMarkWidth, 16, mark(aptitud === "APTO"), { bold: true, center: true, fontSize: 10 });
+      drawCell(x, y + 16, aptitudeLabelWidth, 16, "APTO CON RESTRICCION\n(para el puesto en el que trabaja o postula)", { bold: true, fontSize: 7 });
+      drawCell(x + aptitudeLabelWidth, y + 16, aptitudeMarkWidth, 16, mark(aptitud === "APTO_CON_RESTRICCIONES"), { bold: true, center: true, fontSize: 10 });
+      drawCell(x, y + 32, aptitudeLabelWidth, 16, "NO APTO\n(para el puesto en el que trabaja o postula)", { bold: true, fontSize: 7.5 });
+      drawCell(x + aptitudeLabelWidth, y + 32, aptitudeMarkWidth, 16, mark(aptitud === "NO_APTO"), { bold: true, center: true, fontSize: 10 });
+      drawCell(x + aptitudeLabelWidth + aptitudeMarkWidth, y, restrictionsWidth, 48, `Restricciones:\n${String(det.restriccion_final || "Ninguna")}`, { fontSize: 8 });
+      y += 48;
 
-      const bloqueFirmaY = 246;
-      doc.setDrawColor(148, 163, 184);
-      doc.line(124, bloqueFirmaY, 196, bloqueFirmaY);
-
-      if (firmaDataUrl) {
-        const firmaType = inferDataUrlImageFormat(firmaDataUrl);
-        doc.addImage(firmaDataUrl, firmaType, 138, 226, 44, 18);
+      drawCell(x, y, width, 63, "");
+      if (logoSelloDocumentoDataUrl) {
+        const selloLogoProperties = doc.getImageProperties(logoSelloDocumentoDataUrl);
+        const selloLogoRatio = selloLogoProperties.width / selloLogoProperties.height;
+        const selloLogoWidth = Math.min(15, 14 * selloLogoRatio);
+        const selloLogoHeight = selloLogoWidth / selloLogoRatio;
+        doc.addImage(
+          logoSelloDocumentoDataUrl,
+          inferDataUrlImageFormat(logoSelloDocumentoDataUrl),
+          68,
+          y + 3 + (14 - selloLogoHeight) / 2,
+          selloLogoWidth,
+          selloLogoHeight
+        );
       }
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10);
-      doc.text("MEDICO RESPONSABLE", 160, bloqueFirmaY + 5, { align: "center" });
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9.5);
-      const medicoFirmaNombre = medicoOrdenCrud
-        ? formatProfesionalName(medicoOrdenCrud)
-        : String(det.medico_responsable || det.firma_doctor || "No consignado");
-      doc.text(medicoFirmaNombre, 160, bloqueFirmaY + 10, { align: "center" });
-      if (medicoOrdenCrud) {
-        doc.setFontSize(8.5);
-        const especialidad = String(medicoOrdenCrud.especialidad || "").trim();
-        if (especialidad) {
-          doc.text(especialidad, 160, bloqueFirmaY + 14, { align: "center" });
-        }
-        doc.text(formatColegiatura(medicoOrdenCrud), 160, bloqueFirmaY + 18, { align: "center" });
-        if (String(medicoOrdenCrud.rne || "").trim()) {
-          doc.text(`RNE: ${String(medicoOrdenCrud.rne || "")}`, 160, bloqueFirmaY + 22, { align: "center" });
-        }
-      }
-
+      doc.setFont("times", "bold");
       doc.setFontSize(8.5);
-      doc.setTextColor(71, 85, 105);
-      doc.text(`Codigo de orden: ${String(det.codigo || "-")}`, 12, 279);
-      doc.text("Documento generado por el Sistema Clinica 2 de Mayo", 198, 279, { align: "right" });
-      doc.setTextColor(17, 24, 39);
+      doc.text("CLINICA DOS DE MAYO PUCALLPA", 86, y + 10);
+      if (firmaDataUrl) {
+        doc.addImage(
+          firmaDataUrl,
+          inferDataUrlImageFormat(firmaDataUrl),
+          80,
+          y + 10,
+          50,
+          20
+        );
+      }
+      doc.setDrawColor(0, 0, 0);
+      doc.setLineWidth(0.25);
+      doc.line(68, y + 26, 142, y + 26);
+      doc.setFont("times", "normal");
+      doc.setFontSize(8.5);
+      doc.text(medicoFirmaNombre, 105, y + 33, { align: "center" });
+      doc.setFont("times", "bold");
+      doc.text(especialidad || "MEDICINA OCUPACIONAL", 105, y + 38, { align: "center" });
+      doc.setFont("times", "normal");
+      doc.setFontSize(7.5);
+      const codigosProfesionales = [`CMP: ${cmp || "-"}`];
+      if (rne) codigosProfesionales.push(`RNE: ${rne}`);
+      if (rna) codigosProfesionales.push(`RNA: ${rna}`);
+      doc.text(codigosProfesionales.join("     "), 105, y + 43, { align: "center" });
+      doc.setFont("times", "bold");
+      doc.setFontSize(9);
+      doc.text("Sello y firma del medico que CERTIFICA", 105, y + 58, { align: "center" });
+      y += 63;
+
+      drawCell(x, y, 80, 10, `Fecha de emision: ${fechaEmisionTexto}`, { fontSize: 8.5 });
+      drawCell(x + 80, y, 98, 10, "", { fontSize: 8.5 });
+      doc.setFont("times", "bold");
+      doc.setFontSize(6.5);
+      doc.text("Segun referencia R.M. 312-2011", x + 1, y + 14);
 
       const safeCode = String(det.codigo || `orden_${ordenId}`).replace(/[^A-Za-z0-9_-]/g, "_");
+      await registrarEmisionCertificadoOrdenOcupacional({ id: Number(det.id || ordenId), formato: "pdf" });
       doc.save(`certificado_aptitud_${safeCode}.pdf`);
-      let auditOk = true;
-      try {
-        await registrarEmisionCertificadoOrdenOcupacional({ id: Number(det.id || ordenId), formato: "pdf" });
-      } catch {
-        auditOk = false;
-      }
 
       if (detalleModalData?.id && Number(detalleModalData.id) === Number(det.id || ordenId)) {
         await recargarDetalleModal(detalleModalData.id);
       }
       await recargarListadoYResumen();
-      setMessage(auditOk ? `Certificado emitido: ${safeCode}` : `Certificado emitido: ${safeCode} (sin auditoria)`);
+      setMessage(`Certificado emitido: ${safeCode}`);
     } catch (err) {
       setError(err.message || "No se pudo emitir certificado");
     } finally {
@@ -1289,6 +1850,10 @@ export default function OrdenesOcupacionalesPage() {
     if (!detalleModalData?.id) {
       return;
     }
+    if (form.estado === "observado" && !String(form.observacion || "").trim()) {
+      setDetalleModalError("Ingrese el motivo para marcar el examen como observado");
+      return;
+    }
 
     setSavingDetalleId(Number(itemId));
     setDetalleModalError("");
@@ -1309,6 +1874,105 @@ export default function OrdenesOcupacionalesPage() {
       setError(msg);
     } finally {
       setSavingDetalleId(0);
+    }
+  };
+
+  const onCrearInterconsulta = async (event) => {
+    event.preventDefault();
+    if (!detalleModalData?.id) return;
+    if (Number(interconsultaForm.detalleId || 0) <= 0 || !interconsultaForm.especialidad.trim() || !interconsultaForm.motivo.trim()) {
+      setInterconsultasError("Seleccione examen observado e ingrese especialidad y motivo");
+      return;
+    }
+    setInterconsultaSavingKey("crear");
+    setInterconsultasError("");
+    try {
+      await crearInterconsultaOcupacional({
+        ordenId: detalleModalData.id,
+        ordenDetalleId: interconsultaForm.detalleId,
+        especialidad: interconsultaForm.especialidad,
+        motivo: interconsultaForm.motivo,
+        diagnosticoCie10: interconsultaForm.cie10,
+        diagnosticoDescripcion: interconsultaForm.diagnostico,
+        observaciones: interconsultaForm.observaciones,
+      });
+      setInterconsultaForm({ detalleId: 0, especialidad: "", motivo: "", cie10: "", diagnostico: "", observaciones: "" });
+      await recargarInterconsultas(detalleModalData.id);
+      setMessage("Interconsulta registrada");
+    } catch (err) {
+      setInterconsultasError(err.message || "No se pudo crear interconsulta");
+    } finally {
+      setInterconsultaSavingKey("");
+    }
+  };
+
+  const onResponderInterconsulta = async (row) => {
+    const form = interconsultaRespuestaForms[row.id] || {};
+    if (!String(form.especialista || "").trim() || !String(form.respuesta || "").trim()) {
+      setInterconsultasError("Ingrese especialista y respuesta de la interconsulta");
+      return;
+    }
+    const key = `responder-${row.id}`;
+    setInterconsultaSavingKey(key);
+    setInterconsultasError("");
+    try {
+      await responderInterconsultaOcupacional({
+        id: row.id,
+        especialistaNombre: form.especialista,
+        respuesta: form.respuesta,
+        respuestaArchivo: form.archivo,
+      });
+      await recargarInterconsultas(detalleModalData.id);
+      setMessage("Respuesta de interconsulta registrada");
+    } catch (err) {
+      setInterconsultasError(err.message || "No se pudo registrar respuesta");
+    } finally {
+      setInterconsultaSavingKey("");
+    }
+  };
+
+  const onLevantarInterconsulta = async (row) => {
+    const form = interconsultaLevantamientoForms[row.id] || {};
+    if (!String(form.levantamiento || "").trim() || !String(form.recomendacion || "").trim() || Number(form.medicoId || 0) <= 0) {
+      setInterconsultasError("Complete levantamiento, recomendacion y medico responsable");
+      return;
+    }
+    const key = `levantar-${row.id}`;
+    setInterconsultaSavingKey(key);
+    setInterconsultasError("");
+    try {
+      await levantarInterconsultaOcupacional({
+        id: row.id,
+        levantamiento: form.levantamiento,
+        recomendacion: form.recomendacion,
+        resultadoLevantamiento: form.resultado,
+        medicoId: form.medicoId,
+      });
+      await recargarDetalleModal(detalleModalData.id);
+      await recargarListadoYResumen();
+      setMessage("Observacion levantada; finalice nuevamente el resultado clinico");
+    } catch (err) {
+      setInterconsultasError(err.message || "No se pudo levantar observacion");
+    } finally {
+      setInterconsultaSavingKey("");
+    }
+  };
+
+  const onAnularInterconsulta = async (row) => {
+    const motivo = (window.prompt("Motivo de anulacion de la interconsulta:") || "").trim();
+    if (!motivo) return;
+    const key = `anular-${row.id}`;
+    setInterconsultaSavingKey(key);
+    setInterconsultasError("");
+    try {
+      await anularInterconsultaOcupacional(row.id, motivo);
+      await recargarDetalleModal(detalleModalData.id);
+      await recargarListadoYResumen();
+      setMessage("Interconsulta anulada; el resultado clinico debe finalizarse nuevamente");
+    } catch (err) {
+      setInterconsultasError(err.message || "No se pudo anular interconsulta");
+    } finally {
+      setInterconsultaSavingKey("");
     }
   };
 
@@ -1580,6 +2244,23 @@ export default function OrdenesOcupacionalesPage() {
   };
 
   const totalPages = Number(meta.total_pages || 0);
+  const aptitudEditable = ["completada", "cerrada"].includes(String(detalleModalData?.estado || ""));
+  const totalExamenesDetalle = Number(detalleModalData?.total_items || detalleModalData?.items?.length || 0);
+  const examenesFinalizadosDetalle = Number(detalleModalData?.total_completados || 0);
+  const examenesObservadosDetalle = (detalleModalData?.items || []).filter((item) => item.estado_ejecucion === "observado").length;
+  const interconsultasAbiertasDetalle = interconsultas.filter((row) => ["solicitada", "respondida"].includes(row.estado)).length;
+
+  let motivoBloqueoAptitud = "";
+  if (!aptitudEditable && detalleModalData) {
+    if (examenesObservadosDetalle > 0) {
+      motivoBloqueoAptitud = `Debe resolver ${examenesObservadosDetalle} examen(es) observado(s).`;
+    } else if (interconsultasAbiertasDetalle > 0) {
+      motivoBloqueoAptitud = `Debe levantar ${interconsultasAbiertasDetalle} interconsulta(s) pendiente(s).`;
+    } else {
+      const faltantes = Math.max(0, totalExamenesDetalle - examenesFinalizadosDetalle);
+      motivoBloqueoAptitud = `Faltan ${faltantes} resultado(s) clinico(s) por finalizar (${examenesFinalizadosDetalle}/${totalExamenesDetalle}).`;
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -1619,7 +2300,7 @@ export default function OrdenesOcupacionalesPage() {
             <option value={0}>Seleccione trabajador</option>
             {trabajadores.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.documento_numero} | {t.puesto_trabajo}
+                {t.nombre_completo || "Paciente sin nombre"} | DNI: {t.documento_numero} | {t.puesto_trabajo}
               </option>
             ))}
           </select>
@@ -1696,10 +2377,10 @@ export default function OrdenesOcupacionalesPage() {
             value={medicoOrdenId}
             onChange={(e) => setMedicoOrdenId(Number(e.target.value || 0))}
           >
-            {medicosCrud.length === 0 ? <option value={0}>Sin medicos</option> : null}
+            {medicosCrud.length === 0 ? <option value={0}>Sin medicos con CMP y firma</option> : null}
             {medicosCrud.map((m) => (
               <option key={m.id} value={m.id}>
-                {formatProfesionalName(m)}
+                {formatProfesionalName(m)} - CMP {m.cmp || m.nro_colegiatura}
               </option>
             ))}
           </select>
@@ -1763,7 +2444,7 @@ export default function OrdenesOcupacionalesPage() {
         {preview ? (
           <div className="rounded border border-slate-200 p-3">
             <p className="text-xs text-slate-600 mb-2">
-              Trabajador: <strong>{preview.trabajador?.documento_numero}</strong> | Protocolo: <strong>{preview.protocolo?.descripcion}</strong> | Tipo: <strong>{preview.tipo_evaluacion?.codigo}</strong>
+              Trabajador: <strong>{trabajadores.find((t) => Number(t.id) === Number(trabajadorId))?.nombre_completo || "Paciente sin nombre"}</strong> | DNI: <strong>{preview.trabajador?.documento_numero}</strong> | Protocolo: <strong>{preview.protocolo?.descripcion}</strong> | Tipo: <strong>{preview.tipo_evaluacion?.codigo}</strong>
             </p>
             <p className="text-xs text-slate-600 mb-2">
               Medico: <strong>{medicoOrden ? formatProfesionalName(medicoOrden) : (firmaDoctor || "-")}</strong> | Modo: <strong>{modoOrden || "-"}</strong> | Gestante: <strong>{gestanteOrden ? "SI" : "NO"}</strong>
@@ -1931,6 +2612,7 @@ export default function OrdenesOcupacionalesPage() {
                 <th className="py-2 pr-3">Estado</th>
                 <th className="py-2 pr-3">Ejecucion</th>
                 <th className="py-2 pr-3">Empresa</th>
+                <th className="py-2 pr-3">Paciente</th>
                 <th className="py-2 pr-3">Documento</th>
                 <th className="py-2 pr-3">Puesto</th>
                 <th className="py-2 pr-3">Protocolo</th>
@@ -1951,6 +2633,7 @@ export default function OrdenesOcupacionalesPage() {
                   </td>
                   <td className="py-2 pr-3">{Number(r.total_completados || 0)}/{Number(r.total_items || 0)}</td>
                   <td className="py-2 pr-3">{r.empresa}</td>
+                  <td className="min-w-48 py-2 pr-3 font-medium text-slate-700">{r.paciente_nombre_completo || "-"}</td>
                   <td className="py-2 pr-3">{r.documento_numero}</td>
                   <td className="py-2 pr-3">{r.puesto_trabajo}</td>
                   <td className="py-2 pr-3">{r.protocolo_descripcion}</td>
@@ -2097,11 +2780,11 @@ export default function OrdenesOcupacionalesPage() {
                                   estado: e.target.value,
                                 },
                               }))}
-                              disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
+                              disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
                             >
                               <option value="pendiente">pendiente</option>
                               <option value="en_proceso">en_proceso</option>
-                              <option value="realizado">realizado</option>
+                              <option value="realizado" disabled>realizado (desde formato)</option>
                               <option value="observado">observado</option>
                             </select>
                           </td>
@@ -2117,7 +2800,7 @@ export default function OrdenesOcupacionalesPage() {
                                 },
                               }))}
                               placeholder="Observacion"
-                              disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
+                              disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
                             />
                           </td>
                           <td className="py-2 pr-3 text-xs text-slate-600">{it.fecha_ejecucion || "-"}</td>
@@ -2135,7 +2818,7 @@ export default function OrdenesOcupacionalesPage() {
                                 type="button"
                                 className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
                                 onClick={() => onGuardarDetalle(it.id)}
-                                disabled={savingDetalleId === it.id || detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
+                                disabled={savingDetalleId === it.id || detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
                               >
                                 {savingDetalleId === it.id ? "Guardando..." : "Guardar"}
                               </button>
@@ -2147,16 +2830,224 @@ export default function OrdenesOcupacionalesPage() {
                   </table>
                 </div>
 
+                <section className="mt-4 border-y border-amber-200 bg-amber-50/40 py-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-3">
+                    <h4 className="text-sm font-semibold text-amber-950">Observaciones e interconsultas</h4>
+                    <span className="text-xs text-amber-800">
+                      Abiertas: {interconsultas.filter((row) => ["solicitada", "respondida"].includes(row.estado)).length}
+                    </span>
+                  </div>
+                  {interconsultasError ? <p className="mb-3 px-3 text-xs text-red-600">{interconsultasError}</p> : null}
+
+                  <form onSubmit={onCrearInterconsulta} className="grid grid-cols-1 gap-2 px-3 md:grid-cols-2 xl:grid-cols-3">
+                    <select
+                      className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+                      value={interconsultaForm.detalleId}
+                      onChange={(e) => setInterconsultaForm((prev) => ({ ...prev, detalleId: Number(e.target.value || 0) }))}
+                      disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    >
+                      <option value={0}>Examen observado...</option>
+                      {(detalleModalData.items || [])
+                        .filter((item) => item.estado_ejecucion === "observado")
+                        .filter((item) => !interconsultas.some((row) => Number(row.orden_detalle_id) === Number(item.id) && ["solicitada", "respondida"].includes(row.estado)))
+                        .map((item) => (
+                          <option key={item.id} value={item.id}>{item.examen_codigo} - {item.examen_descripcion}</option>
+                        ))}
+                    </select>
+                    <input
+                      className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+                      value={interconsultaForm.especialidad}
+                      onChange={(e) => setInterconsultaForm((prev) => ({ ...prev, especialidad: e.target.value }))}
+                      placeholder="Especialidad requerida"
+                      disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <input
+                      className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+                      value={interconsultaForm.cie10}
+                      onChange={(e) => setInterconsultaForm((prev) => ({ ...prev, cie10: e.target.value }))}
+                      placeholder="CIE-10 (opcional)"
+                      disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="min-h-20 rounded border border-slate-300 px-2 py-1.5 text-xs md:col-span-2"
+                      value={interconsultaForm.motivo}
+                      onChange={(e) => setInterconsultaForm((prev) => ({ ...prev, motivo: e.target.value }))}
+                      placeholder="Motivo de la interconsulta"
+                      disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="min-h-20 rounded border border-slate-300 px-2 py-1.5 text-xs"
+                      value={interconsultaForm.diagnostico}
+                      onChange={(e) => setInterconsultaForm((prev) => ({ ...prev, diagnostico: e.target.value }))}
+                      placeholder="Diagnostico o sospecha clinica"
+                      disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <textarea
+                      className="min-h-16 rounded border border-slate-300 px-2 py-1.5 text-xs md:col-span-2 xl:col-span-3"
+                      value={interconsultaForm.observaciones}
+                      onChange={(e) => setInterconsultaForm((prev) => ({ ...prev, observaciones: e.target.value }))}
+                      placeholder="Observaciones adicionales (opcional)"
+                      disabled={detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                    />
+                    <div className="md:col-span-2 xl:col-span-3">
+                      <button
+                        type="submit"
+                        className="rounded border border-amber-400 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                        disabled={interconsultaSavingKey === "crear" || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                      >
+                        {interconsultaSavingKey === "crear" ? "Registrando..." : "Crear interconsulta"}
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="mt-4 divide-y divide-amber-200 border-t border-amber-200">
+                    {interconsultasLoading ? <p className="px-3 py-3 text-xs text-slate-500">Cargando interconsultas...</p> : null}
+                    {!interconsultasLoading && interconsultas.length === 0 ? (
+                      <p className="px-3 py-3 text-xs text-slate-500">No hay interconsultas registradas.</p>
+                    ) : null}
+                    {interconsultas.map((row) => {
+                      const respuestaForm = interconsultaRespuestaForms[row.id] || {};
+                      const levantamientoForm = interconsultaLevantamientoForms[row.id] || {};
+                      const estaAbierta = ["solicitada", "respondida"].includes(row.estado);
+                      return (
+                        <div key={row.id} className="px-3 py-4">
+                          <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{row.examen_codigo} - {row.especialidad}</p>
+                              <p className="text-xs text-slate-600">{row.motivo}</p>
+                              {row.diagnostico_cie10 || row.diagnostico_descripcion ? (
+                                <p className="mt-1 text-xs text-slate-600">Diagnostico: {[row.diagnostico_cie10, row.diagnostico_descripcion].filter(Boolean).join(" - ")}</p>
+                              ) : null}
+                            </div>
+                            <span className={`rounded px-2 py-1 text-[11px] font-semibold ${row.estado === "levantada" ? "bg-emerald-100 text-emerald-700" : row.estado === "anulada" ? "bg-slate-200 text-slate-600" : row.estado === "respondida" ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-800"}`}>
+                              {row.estado}
+                            </span>
+                          </div>
+
+                          {estaAbierta ? (
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <input
+                                className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+                                value={respuestaForm.especialista || ""}
+                                onChange={(e) => setInterconsultaRespuestaForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), especialista: e.target.value } }))}
+                                placeholder="Especialista que responde"
+                              />
+                              <input
+                                type="file"
+                                accept="application/pdf,.pdf"
+                                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                                onChange={(e) => setInterconsultaRespuestaForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), archivo: e.target.files?.[0] || null } }))}
+                              />
+                              <textarea
+                                className="min-h-20 rounded border border-slate-300 px-2 py-1.5 text-xs md:col-span-2"
+                                value={respuestaForm.respuesta || ""}
+                                onChange={(e) => setInterconsultaRespuestaForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), respuesta: e.target.value } }))}
+                                placeholder="Respuesta del especialista"
+                              />
+                              <div className="flex flex-wrap gap-2 md:col-span-2">
+                                <button
+                                  type="button"
+                                  className="rounded border border-blue-300 bg-white px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                                  onClick={() => onResponderInterconsulta(row)}
+                                  disabled={interconsultaSavingKey === `responder-${row.id}`}
+                                >
+                                  {interconsultaSavingKey === `responder-${row.id}` ? "Guardando..." : row.estado === "respondida" ? "Actualizar respuesta" : "Registrar respuesta"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded border border-red-300 bg-white px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                  onClick={() => onAnularInterconsulta(row)}
+                                  disabled={interconsultaSavingKey === `anular-${row.id}`}
+                                >
+                                  Anular
+                                </button>
+                                {row.respuesta_documento ? (
+                                  <a className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700" href={resolveAssetUrl(row.respuesta_documento)} target="_blank" rel="noreferrer">Ver PDF</a>
+                                ) : null}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {row.estado === "respondida" ? (
+                            <div className="mt-3 grid grid-cols-1 gap-2 border-t border-amber-200 pt-3 md:grid-cols-2">
+                              <textarea
+                                className="min-h-20 rounded border border-slate-300 px-2 py-1.5 text-xs"
+                                value={levantamientoForm.levantamiento || ""}
+                                onChange={(e) => setInterconsultaLevantamientoForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), levantamiento: e.target.value } }))}
+                                placeholder="Levantamiento de observacion"
+                              />
+                              <textarea
+                                className="min-h-20 rounded border border-slate-300 px-2 py-1.5 text-xs"
+                                value={levantamientoForm.recomendacion || ""}
+                                onChange={(e) => setInterconsultaLevantamientoForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), recomendacion: e.target.value } }))}
+                                placeholder="Recomendacion"
+                              />
+                              <select
+                                className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+                                value={levantamientoForm.resultado || "FAVORABLE"}
+                                onChange={(e) => setInterconsultaLevantamientoForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), resultado: e.target.value } }))}
+                              >
+                                <option value="FAVORABLE">FAVORABLE</option>
+                                <option value="NO_FAVORABLE">NO FAVORABLE</option>
+                              </select>
+                              <select
+                                className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+                                value={levantamientoForm.medicoId || 0}
+                                onChange={(e) => setInterconsultaLevantamientoForms((prev) => ({ ...prev, [row.id]: { ...(prev[row.id] || {}), medicoId: Number(e.target.value || 0) } }))}
+                              >
+                                <option value={0}>Medico responsable...</option>
+                                {medicosCrud.map((medico) => (
+                                  <option key={medico.id} value={medico.id}>{formatProfesionalName(medico)} - CMP {medico.cmp || medico.nro_colegiatura}</option>
+                                ))}
+                              </select>
+                              <div className="md:col-span-2">
+                                <button
+                                  type="button"
+                                  className="rounded border border-emerald-400 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                                  onClick={() => onLevantarInterconsulta(row)}
+                                  disabled={interconsultaSavingKey === `levantar-${row.id}`}
+                                >
+                                  {interconsultaSavingKey === `levantar-${row.id}` ? "Levantando..." : "Registrar levantamiento"}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {row.estado === "levantada" ? (
+                            <div className="mt-2 text-xs text-emerald-800">
+                              <p><strong>Resultado:</strong> {row.resultado_levantamiento}</p>
+                              <p><strong>Levantamiento:</strong> {row.levantamiento}</p>
+                              <p><strong>Recomendacion:</strong> {row.recomendacion}</p>
+                              <p><strong>Medico:</strong> {row.medico_levantamiento_nombre_snapshot} - CMP {row.medico_levantamiento_cmp_snapshot}</p>
+                            </div>
+                          ) : null}
+                          {row.estado === "anulada" ? <p className="text-xs text-slate-600">Motivo: {row.anulacion_motivo}</p> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
                 <div className="mt-4 rounded border border-emerald-200 bg-emerald-50/40 p-3">
                   <h4 className="mb-2 text-sm font-semibold text-emerald-900">Aptitud final y certificado</h4>
+                  {aptitudEditable ? (
+                    <p className="mb-3 rounded border border-emerald-200 bg-emerald-100 px-2 py-1.5 text-xs text-emerald-900">
+                      Resultados completos ({examenesFinalizadosDetalle}/{totalExamenesDetalle}). Puede seleccionar o actualizar la aptitud final.
+                    </p>
+                  ) : (
+                    <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                      Aptitud bloqueada: {motivoBloqueoAptitud} Finalice cada formato clinico para habilitarla.
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <div>
-                      <label className="mb-1 block text-xs text-slate-600">Aptitud final</label>
+                      <label htmlFor="aptitud-final-orden" className="mb-1 block text-xs text-slate-600">Aptitud final</label>
                       <select
+                        id="aptitud-final-orden"
                         className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
                         value={aptitudForm.aptitud}
                         onChange={(e) => setAptitudForm((prev) => ({ ...prev, aptitud: e.target.value }))}
-                        disabled={detalleModalData.estado !== "cerrada" || savingAptitud}
+                        disabled={!aptitudEditable || savingAptitud}
                       >
                         <option value="">Seleccione...</option>
                         <option value="APTO">APTO</option>
@@ -2165,14 +3056,21 @@ export default function OrdenesOcupacionalesPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs text-slate-600">Medico responsable</label>
-                      <input
+                      <label htmlFor="medico-responsable-aptitud" className="mb-1 block text-xs text-slate-600">Medico responsable</label>
+                      <select
+                        id="medico-responsable-aptitud"
                         className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
-                        value={aptitudForm.medico}
-                        onChange={(e) => setAptitudForm((prev) => ({ ...prev, medico: e.target.value }))}
-                        placeholder="Nombre medico"
-                        disabled={detalleModalData.estado !== "cerrada" || savingAptitud}
-                      />
+                        value={aptitudForm.medicoId}
+                        onChange={(e) => setAptitudForm((prev) => ({ ...prev, medicoId: Number(e.target.value || 0) }))}
+                        disabled={!aptitudEditable || savingAptitud}
+                      >
+                        <option value={0}>Seleccione...</option>
+                        {medicosCrud.map((medico) => (
+                          <option key={medico.id} value={medico.id}>
+                            {formatProfesionalName(medico)} - CMP {medico.cmp || medico.nro_colegiatura}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div>
                       <label className="mb-1 block text-xs text-slate-600">Restricciones</label>
@@ -2181,7 +3079,7 @@ export default function OrdenesOcupacionalesPage() {
                         value={aptitudForm.restriccion}
                         onChange={(e) => setAptitudForm((prev) => ({ ...prev, restriccion: e.target.value }))}
                         placeholder="Restricciones"
-                        disabled={detalleModalData.estado !== "cerrada" || savingAptitud}
+                        disabled={!aptitudEditable || savingAptitud}
                       />
                     </div>
                     <div>
@@ -2191,7 +3089,7 @@ export default function OrdenesOcupacionalesPage() {
                         value={aptitudForm.recomendacion}
                         onChange={(e) => setAptitudForm((prev) => ({ ...prev, recomendacion: e.target.value }))}
                         placeholder="Recomendaciones"
-                        disabled={detalleModalData.estado !== "cerrada" || savingAptitud}
+                        disabled={!aptitudEditable || savingAptitud}
                       />
                     </div>
                   </div>
@@ -2200,9 +3098,14 @@ export default function OrdenesOcupacionalesPage() {
                       type="button"
                       className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
                       onClick={onGuardarAptitud}
-                      disabled={detalleModalData.estado !== "cerrada" || savingAptitud}
+                      disabled={
+                        !aptitudEditable
+                        || savingAptitud
+                        || !aptitudForm.aptitud
+                        || Number(aptitudForm.medicoId || 0) <= 0
+                      }
                     >
-                      {savingAptitud ? "Guardando..." : "Guardar aptitud"}
+                      {savingAptitud ? "Guardando..." : (detalleModalData.aptitud_final ? "Actualizar aptitud" : "Guardar aptitud")}
                     </button>
                     <button
                       type="button"
@@ -2220,6 +3123,19 @@ export default function OrdenesOcupacionalesPage() {
                   <p className="mb-3 text-xs text-cyan-800">
                     Gestion de historia ocupacional por orden, manteniendo la logica legacy mientras la orden siga editable.
                   </p>
+
+                  <div className="mb-3 border-y border-cyan-200 bg-white px-3 py-2">
+                    <p className="text-[11px] font-semibold uppercase text-slate-500">Paciente</p>
+                    <p className="text-sm font-semibold text-slate-900">
+                      {detalleModalData.paciente_nombre_completo || "Paciente sin nombre registrado"}
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                      <span><strong>Documento:</strong> {detalleModalData.documento_numero || "-"}</span>
+                      <span><strong>HC:</strong> {detalleModalData.paciente_historia_clinica || "-"}</span>
+                      <span><strong>Edad:</strong> {detalleModalData.paciente_edad ?? "-"}</span>
+                      <span><strong>Sexo:</strong> {detalleModalData.paciente_sexo || "-"}</span>
+                    </div>
+                  </div>
 
                   <form onSubmit={onGuardarHistoria} className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <input
@@ -2260,30 +3176,29 @@ export default function OrdenesOcupacionalesPage() {
                       onChange={(e) => setHistoriaForm((prev) => ({ ...prev, observaciones: e.target.value }))}
                       disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
                     />
-                    <textarea
-                      className="rounded border border-slate-300 px-2 py-1 font-mono text-xs"
-                      rows={4}
-                      placeholder="Antecedentes laborales JSON"
+                    <ListaClinicaEditable
+                      title="Antecedentes laborales"
+                      singular="Antecedente laboral"
                       value={historiaForm.antecedentes_laborales_json}
-                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, antecedentes_laborales_json: e.target.value }))}
+                      onChange={(value) => setHistoriaForm((prev) => ({ ...prev, antecedentes_laborales_json: value }))}
                       disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
                     />
-                    <textarea
-                      className="rounded border border-slate-300 px-2 py-1 font-mono text-xs"
-                      rows={4}
-                      placeholder="Antecedentes patologicos JSON"
+                    <ListaClinicaEditable
+                      title="Antecedentes patológicos"
+                      singular="Antecedente patológico"
                       value={historiaForm.antecedentes_patologicos_json}
-                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, antecedentes_patologicos_json: e.target.value }))}
+                      onChange={(value) => setHistoriaForm((prev) => ({ ...prev, antecedentes_patologicos_json: value }))}
                       disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
                     />
-                    <textarea
-                      className="rounded border border-slate-300 px-2 py-1 font-mono text-xs md:col-span-2"
-                      rows={4}
-                      placeholder="Habitos JSON"
-                      value={historiaForm.habitos_json}
-                      onChange={(e) => setHistoriaForm((prev) => ({ ...prev, habitos_json: e.target.value }))}
-                      disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
-                    />
+                    <div className="md:col-span-2">
+                      <ListaClinicaEditable
+                        title="Hábitos"
+                        singular="Hábito"
+                        value={historiaForm.habitos_json}
+                        onChange={(value) => setHistoriaForm((prev) => ({ ...prev, habitos_json: value }))}
+                        disabled={historiaSaving || detalleModalData.estado === "cerrada" || detalleModalData.estado === "anulada"}
+                      />
+                    </div>
                     <div className="md:col-span-2 flex flex-wrap gap-2">
                       <button
                         type="submit"
@@ -2375,6 +3290,7 @@ export default function OrdenesOcupacionalesPage() {
                       <div className="rounded border border-slate-200 bg-white p-2 text-xs">Total: <strong>{clinicaConsolidada.resumen.total_items || 0}</strong></div>
                       <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-xs">Completados: <strong>{clinicaConsolidada.resumen.total_completados || 0}</strong></div>
                       <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs">Observados: <strong>{clinicaConsolidada.resumen.total_observados || 0}</strong></div>
+                      <div className="rounded border border-blue-200 bg-blue-50 p-2 text-xs">Interconsultas: <strong>{clinicaConsolidada.resumen.interconsultas_abiertas || 0}</strong></div>
                       <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs">Pendientes: <strong>{clinicaConsolidada.resumen.total_pendientes || 0}</strong></div>
                       <div className="rounded border border-cyan-200 bg-cyan-50 p-2 text-xs">Avance: <strong>{clinicaConsolidada.resumen.porcentaje_avance || 0}%</strong></div>
                       <div className="rounded border border-violet-200 bg-violet-50 p-2 text-xs">Historias: <strong>{clinicaConsolidada.resumen.historias_registradas || 0}</strong></div>
@@ -2397,6 +3313,7 @@ export default function OrdenesOcupacionalesPage() {
                       <option value="orden_anulada">orden_anulada</option>
                       <option value="aptitud_final_guardada">aptitud_final_guardada</option>
                       <option value="certificado_emitido">certificado_emitido</option>
+                      <option value="resultado_pdf_emitido">resultado_pdf_emitido</option>
                       <option value="plantilla_guardada">plantilla_guardada</option>
                       <option value="plantilla_eliminada">plantilla_eliminada</option>
                     </select>
@@ -2520,7 +3437,7 @@ export default function OrdenesOcupacionalesPage() {
                   >
                     Cargar plantilla sugerida
                   </button>
-                  <p className="text-[11px] text-slate-500">Puede ajustar el JSON sugerido antes de guardar.</p>
+                  <p className="text-[11px] text-slate-500">La plantilla carga los campos clinicos correspondientes al examen.</p>
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
@@ -2573,12 +3490,12 @@ export default function OrdenesOcupacionalesPage() {
                   <p className="text-[11px] text-slate-500">Solo se eliminan plantillas guardadas en catalogo (no la sugerida del sistema).</p>
                 </div>
 
-                <textarea
-                  className="w-full rounded border border-slate-300 px-2 py-1 font-mono text-xs"
-                  rows={16}
-                  value={formatoForm.datosJsonText}
-                  onChange={(e) => setFormatoForm((prev) => ({ ...prev, datosJsonText: e.target.value }))}
-                  placeholder='{"hallazgos":"", "conclusion":""}'
+                <FormatoClinicoCampos
+                  templateCode={String(formatoModalData?.detalle?.template_code || "general_basico")}
+                  datos={formatoForm.datos}
+                  onChange={onFormatoDatoChange}
+                  onAudiometriaChange={onFormatoAudiometriaChange}
+                  onParametroChange={onFormatoParametroChange}
                   disabled={formatoModalSaving}
                 />
 
@@ -2587,9 +3504,18 @@ export default function OrdenesOcupacionalesPage() {
                     type="button"
                     className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
                     onClick={onGuardarFormatoClinico}
-                    disabled={formatoModalSaving}
+                    disabled={formatoModalSaving || formatoPdfGenerating}
                   >
                     {formatoModalSaving ? "Guardando..." : "Guardar formato"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-400 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={onDescargarFormatoClinicoPdf}
+                    disabled={formatoModalSaving || formatoPdfGenerating || String(formatoModalData?.data?.estado || "") !== "finalizado"}
+                    title={String(formatoModalData?.data?.estado || "") === "finalizado" ? "Descargar resultado clinico" : "Finalice y guarde el resultado para generar su PDF"}
+                  >
+                    {formatoPdfGenerating ? "Generando PDF..." : "PDF del resultado"}
                   </button>
                 </div>
               </div>

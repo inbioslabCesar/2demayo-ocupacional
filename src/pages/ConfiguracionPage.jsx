@@ -55,6 +55,7 @@ function ConfiguracionPage() {
     email: '',
     horario_atencion: '',
     logo_url: '',
+    logo_ocupacional_url: '',
     website: '',
     ruc: '',
     especialidades: '',
@@ -81,7 +82,9 @@ function ConfiguracionPage() {
   const [loading, setLoading] = useState(false);
   const [cargandoDatos, setCargandoDatos] = useState(true);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [uploadingLogoOcupacional, setUploadingLogoOcupacional] = useState(false);
   const [logoPreview, setLogoPreview] = useState('');
+  const [logoOcupacionalPreview, setLogoOcupacionalPreview] = useState('');
   const [caratulaPreview, setCaratulaPreview] = useState('');
 
   // Cargar configuración al montar el componente
@@ -114,6 +117,7 @@ function ConfiguracionPage() {
           setConfiguracion(prev => ({ ...prev, ...incoming }));
           // mostrar preview si hay logo
           if (result.data && result.data.logo_url) setLogoPreview(result.data.logo_url);
+          if (result.data && result.data.logo_ocupacional_url) setLogoOcupacionalPreview(result.data.logo_ocupacional_url);
           if (result.data && result.data.caratula_fondo_url) setCaratulaPreview(result.data.caratula_fondo_url);
         } else {
           throw new Error(result.error || 'Error al cargar la configuración');
@@ -191,6 +195,20 @@ function ConfiguracionPage() {
     return String(j.path);
   };
 
+  const subirArchivoLogoOcupacional = async (file) => {
+    const form = new FormData();
+    form.append('logo_ocupacional', file);
+    const resp = await authFetch('api_upload_logo_ocupacional.php', {
+      method: 'POST',
+      body: form
+    });
+    const result = await resp.json();
+    if (!(resp.ok && result.success && result.path)) {
+      throw new Error(result.error || 'Error subiendo logo ocupacional');
+    }
+    return String(result.path);
+  };
+
   const guardarConfiguracion = async () => {
     // Validar campos requeridos
     if (!configuracion.nombre_clinica || !configuracion.direccion || 
@@ -250,6 +268,7 @@ function ConfiguracionPage() {
     
     try {
       let logoUrlFinal = normalizeLogoForSave(configuracion.logo_url);
+      let logoOcupacionalUrlFinal = normalizeLogoForSave(configuracion.logo_ocupacional_url);
 
       if (configuracion._logo_file) {
         setUploadingLogo(true);
@@ -257,10 +276,17 @@ function ConfiguracionPage() {
         logoUrlFinal = normalizeLogoForSave(uploadedPath);
       }
 
-      const { _logo_file, _caratula_file, ...restConfig } = configuracion;
+      if (configuracion._logo_ocupacional_file) {
+        setUploadingLogoOcupacional(true);
+        const uploadedPath = await subirArchivoLogoOcupacional(configuracion._logo_ocupacional_file);
+        logoOcupacionalUrlFinal = normalizeLogoForSave(uploadedPath);
+      }
+
+      const { _logo_file, _logo_ocupacional_file, _caratula_file, ...restConfig } = configuracion;
       const payload = {
         ...restConfig,
         logo_url: logoUrlFinal,
+        logo_ocupacional_url: logoOcupacionalUrlFinal,
       };
 
       if (_caratula_file) {
@@ -290,6 +316,8 @@ function ConfiguracionPage() {
             setLogoPreview(payload.logo_url);
             setConfiguracion(prev => ({ ...prev, logo_url: payload.logo_url, _logo_file: null }));
           }
+          setLogoOcupacionalPreview(payload.logo_ocupacional_url || '');
+          setConfiguracion(prev => ({ ...prev, logo_ocupacional_url: payload.logo_ocupacional_url || '', _logo_ocupacional_file: null }));
           if (payload.caratula_fondo_url) {
             setCaratulaPreview(payload.caratula_fondo_url);
             setConfiguracion(prev => ({ ...prev, caratula_fondo_url: payload.caratula_fondo_url, _caratula_file: null }));
@@ -340,6 +368,7 @@ function ConfiguracionPage() {
       });
     } finally {
       setUploadingLogo(false);
+      setUploadingLogoOcupacional(false);
       setLoading(false);
     }
   };
@@ -405,6 +434,44 @@ function ConfiguracionPage() {
         updated_at: Date.now()
       }
     }));
+  };
+
+  const handleLogoOcupacionalFileChange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      Swal.fire({ title: 'Formato no válido', text: 'Use una imagen PNG o JPG.', icon: 'warning' });
+      e.target.value = '';
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const ratio = image.naturalWidth / image.naturalHeight;
+      if (image.naturalWidth < 600 || image.naturalHeight < 120 || ratio < 2.5 || ratio > 6.5) {
+        URL.revokeObjectURL(previewUrl);
+        e.target.value = '';
+        Swal.fire({
+          title: 'Dimensiones no válidas',
+          text: 'El logo debe ser horizontal, medir al menos 600 x 120 px y tener proporción entre 2.5:1 y 6.5:1.',
+          icon: 'warning'
+        });
+        return;
+      }
+      setLogoOcupacionalPreview(previewUrl);
+      setConfiguracion(prev => ({ ...prev, _logo_ocupacional_file: file }));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(previewUrl);
+      e.target.value = '';
+      Swal.fire({ title: 'Imagen no válida', text: 'No se pudo leer la imagen seleccionada.', icon: 'warning' });
+    };
+    image.src = previewUrl;
+  };
+
+  const clearLogoOcupacional = () => {
+    setConfiguracion(prev => ({ ...prev, logo_ocupacional_url: '', _logo_ocupacional_file: null }));
+    setLogoOcupacionalPreview('');
   };
 
   const handleCaratulaFileChange = (e) => {
@@ -700,6 +767,43 @@ function ConfiguracionPage() {
                   />
                 </div>
               ) : null}
+            </div>
+
+            <div className="md:col-span-2 rounded-md border border-cyan-200 bg-cyan-50/40 p-4">
+              <label className="block text-sm font-semibold text-gray-800 mb-2">
+                Logo horizontal para certificados ocupacionales
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+                  onChange={handleLogoOcupacionalFileChange}
+                  className="min-w-0 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={clearLogoOcupacional}
+                  className="bg-red-100 text-red-700 px-3 py-1 rounded-md hover:bg-red-200 text-sm"
+                >
+                  Eliminar
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-gray-600">
+                PNG o JPG horizontal. Mínimo 600 x 120 px, proporción entre 2.5:1 y 6.5:1, máximo 5 MB. Se usa en certificados y PDFs ocupacionales; no cambia el logo del sistema.
+              </p>
+              {logoOcupacionalPreview ? (
+                <div className="mt-3 max-w-2xl rounded border border-gray-200 bg-white p-3">
+                  <div className="mb-2 text-xs font-medium text-gray-600">Vista previa de cabecera documental:</div>
+                  <img
+                    src={resolveLogoPreviewUrl(logoOcupacionalPreview)}
+                    alt="Logo horizontal para documentos ocupacionales"
+                    className="h-auto max-h-32 w-full object-contain"
+                  />
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-amber-700">Sin logo ocupacional: los documentos usarán el logo general como respaldo.</p>
+              )}
+              {uploadingLogoOcupacional ? <p className="mt-2 text-xs font-medium text-cyan-700">Subiendo logo ocupacional...</p> : null}
             </div>
 
             <div>

@@ -1,23 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
+  actualizarTrabajadorOcupacional,
+  anularTrabajadorOcupacional,
   darBajaTrabajadorOcupacional,
+  listarCatalogosLaboralesEmpresa,
   listarEmpresasOcupacionales,
   listarTrabajadoresOcupacionalesPaginado,
 } from "../../api/ocupacionalApi";
 import FormTrabajador from "./FormTrabajador";
-
-const EMPRESA_STORAGE_KEY = "ocupacional_trabajadores_empresa_id_v1";
-
-function readStoredEmpresaId() {
-  try {
-    const raw = window.localStorage.getItem(EMPRESA_STORAGE_KEY);
-    const n = Number(raw || 0);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  } catch {
-    return 0;
-  }
-}
 
 export default function TrabajadoresOcupacionalesPage() {
   const [searchParams] = useSearchParams();
@@ -36,6 +27,10 @@ export default function TrabajadoresOcupacionalesPage() {
   const [trabajadores, setTrabajadores] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [editAreas, setEditAreas] = useState([]);
+  const [editPuestos, setEditPuestos] = useState([]);
+  const [editSaving, setEditSaving] = useState(false);
   const requestRef = useRef(0);
   const hydratedEmpresaRef = useRef(false);
 
@@ -75,32 +70,17 @@ export default function TrabajadoresOcupacionalesPage() {
       return;
     }
 
-    const empresaIdGuardada = readStoredEmpresaId();
     const existe = (id) => empresas.some((e) => Number(e.id) === Number(id));
 
     let empresaInicial = 0;
     if (empresaIdDesdeRuta > 0 && existe(empresaIdDesdeRuta)) {
       empresaInicial = empresaIdDesdeRuta;
-    } else if (empresaIdGuardada > 0 && existe(empresaIdGuardada)) {
-      empresaInicial = empresaIdGuardada;
     }
 
-    if (empresaInicial > 0) {
-      setEmpresaId(empresaInicial);
-    }
+    setEmpresaId(empresaInicial);
 
     hydratedEmpresaRef.current = true;
   }, [empresas, empresaIdDesdeRuta]);
-
-  useEffect(() => {
-    try {
-      if (empresaId > 0) {
-        window.localStorage.setItem(EMPRESA_STORAGE_KEY, String(empresaId));
-      }
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [empresaId]);
 
   const loadTrabajadores = useCallback(async () => {
     const requestId = ++requestRef.current;
@@ -146,8 +126,68 @@ export default function TrabajadoresOcupacionalesPage() {
     }
   };
 
-  const handleCreated = () => {
+  const abrirEdicion = async (item) => {
+    setError("");
+    try {
+      const [areas, puestos] = await Promise.all([
+        listarCatalogosLaboralesEmpresa({ empresaId: item.empresa_id, tipo: "area", estado: "activo" }),
+        listarCatalogosLaboralesEmpresa({ empresaId: item.empresa_id, tipo: "puesto", estado: "activo" }),
+      ]);
+      setEditAreas(areas || []);
+      setEditPuestos(puestos || []);
+      setEditing({ ...item });
+    } catch (err) {
+      setError(err.message || "No se pudieron cargar los catálogos para editar");
+    }
+  };
+
+  const guardarEdicion = async (event) => {
+    event.preventDefault();
+    setEditSaving(true);
+    setError("");
+    try {
+      await actualizarTrabajadorOcupacional({
+        id: editing.id,
+        puestoTrabajo: editing.puesto_trabajo,
+        areaRiesgo: editing.area_riesgo,
+        tipoContrato: editing.tipo_contrato,
+        fechaIngreso: editing.fecha_ingreso,
+      });
+      setEditing(null);
+      await loadTrabajadores();
+    } catch (err) {
+      setError(err.message || "No se pudo actualizar el trabajador");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const onAnular = async (item) => {
+    const motivo = window.prompt("Motivo de anulación (obligatorio):", "Registro creado por error");
+    if (motivo === null) return;
+    if (motivo.trim().length < 5) {
+      setError("Ingrese un motivo de anulación de al menos 5 caracteres");
+      return;
+    }
+    if (!window.confirm(`¿Anular el registro del documento ${item.documento_numero}? Esta acción quedará auditada.`)) return;
+    setError("");
+    try {
+      await anularTrabajadorOcupacional({ id: item.id, motivo });
+      await loadTrabajadores();
+    } catch (err) {
+      setError(err.message || "No se pudo anular el registro");
+    }
+  };
+
+  const handleCreated = (registered) => {
+    const registeredEmpresaId = Number(registered?.empresa_id || 0);
     setPage(1);
+    setEstado("todos");
+    setQ("");
+    if (registeredEmpresaId > 0 && registeredEmpresaId !== empresaId) {
+      setEmpresaId(registeredEmpresaId);
+      return;
+    }
     loadTrabajadores();
   };
 
@@ -173,7 +213,7 @@ export default function TrabajadoresOcupacionalesPage() {
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             <input
               className="rounded-md border border-slate-300 px-3 py-2 text-sm sm:col-span-2 lg:col-span-1"
-              placeholder="Buscar por documento, empresa o puesto"
+              placeholder="Buscar por trabajador, documento, empresa o puesto"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
@@ -203,6 +243,7 @@ export default function TrabajadoresOcupacionalesPage() {
               <option value="todos">Todos</option>
               <option value="activo">Activos</option>
               <option value="retirado">Retirados</option>
+              <option value="anulado">Anulados</option>
             </select>
             <div className="flex gap-2">
               <select
@@ -252,6 +293,7 @@ export default function TrabajadoresOcupacionalesPage() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b text-left text-slate-500">
+                <th className="py-2 pr-3">Trabajador</th>
                 <th className="py-2 pr-3">Documento</th>
                 <th className="py-2 pr-3">Empresa</th>
                 <th className="py-2 pr-3">Puesto</th>
@@ -263,7 +305,12 @@ export default function TrabajadoresOcupacionalesPage() {
             <tbody>
               {trabajadores.map((item) => (
                 <tr key={item.id} className="border-b last:border-0">
-                  <td className="py-2 pr-3">{item.documento_numero}</td>
+                  <td className="py-2 pr-3">
+                    <div className="min-w-[12rem] font-semibold text-slate-800">{item.nombre_completo || "Identidad no disponible"}</div>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <span className="whitespace-nowrap">{item.documento_tipo || "DOC"} {item.documento_numero}</span>
+                  </td>
                   <td className="py-2 pr-3">{item.empresa}</td>
                   <td className="py-2 pr-3">{item.puesto_trabajo}</td>
                   <td className="py-2 pr-3">
@@ -273,7 +320,16 @@ export default function TrabajadoresOcupacionalesPage() {
                   </td>
                   <td className="py-2 pr-3">{item.fecha_ingreso}</td>
                   <td className="py-2 pr-3">
-                    {item.estado_laboral === "activo" ? (
+                    {item.estado_laboral !== "anulado" ? (
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={() => abrirEdicion(item)}
+                          className="rounded bg-blue-600 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-700"
+                        >
+                          Editar
+                        </button>
+                        {item.estado_laboral === "activo" ? (
                       <button
                         type="button"
                         onClick={() => onBaja(item.id)}
@@ -281,6 +337,15 @@ export default function TrabajadoresOcupacionalesPage() {
                       >
                         Dar baja
                       </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => onAnular(item)}
+                          className="rounded border border-red-300 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                        >
+                          Anular
+                        </button>
+                      </div>
                     ) : (
                       <span className="text-xs text-slate-400">Sin acciones</span>
                     )}
@@ -289,7 +354,7 @@ export default function TrabajadoresOcupacionalesPage() {
               ))}
               {!loading && trabajadores.length === 0 ? (
                 <tr>
-                  <td className="py-3 text-slate-500" colSpan={6}>No hay trabajadores para mostrar.</td>
+                  <td className="py-3 text-slate-500" colSpan={7}>No hay trabajadores para mostrar.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -319,6 +384,47 @@ export default function TrabajadoresOcupacionalesPage() {
           </div>
         </div>
       </div>
+
+      {editing ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <form onSubmit={guardarEdicion} className="w-full max-w-xl space-y-4 rounded-lg bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Editar datos laborales</h2>
+                <p className="text-sm text-slate-500">{editing.nombre_completo || editing.documento_numero} · {editing.empresa}</p>
+              </div>
+              <button type="button" onClick={() => setEditing(null)} className="text-2xl leading-none text-slate-500" aria-label="Cerrar">×</button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-sm font-medium text-slate-700">Puesto
+                <select required className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={editing.puesto_trabajo} onChange={(e) => setEditing((prev) => ({ ...prev, puesto_trabajo: e.target.value }))}>
+                  {!editPuestos.some((row) => row.nombre === editing.puesto_trabajo) ? <option value={editing.puesto_trabajo}>{editing.puesto_trabajo}</option> : null}
+                  {editPuestos.map((row) => <option key={row.id} value={row.nombre}>{row.nombre}</option>)}
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700">Área
+                <select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={editing.area_riesgo || ""} onChange={(e) => setEditing((prev) => ({ ...prev, area_riesgo: e.target.value }))}>
+                  <option value="">Sin área</option>
+                  {editing.area_riesgo && !editAreas.some((row) => row.nombre === editing.area_riesgo) ? <option value={editing.area_riesgo}>{editing.area_riesgo}</option> : null}
+                  {editAreas.map((row) => <option key={row.id} value={row.nombre}>{row.nombre}</option>)}
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700">Tipo de contrato
+                <select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={editing.tipo_contrato || ""} onChange={(e) => setEditing((prev) => ({ ...prev, tipo_contrato: e.target.value }))}>
+                  <option value="">Sin especificar</option><option value="indefinido">Indefinido</option><option value="plazo_fijo">Plazo fijo</option><option value="temporal">Temporal</option>
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700">Fecha de ingreso
+                <input required type="date" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={editing.fecha_ingreso || ""} onChange={(e) => setEditing((prev) => ({ ...prev, fecha_ingreso: e.target.value }))} />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditing(null)} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Cancelar</button>
+              <button type="submit" disabled={editSaving} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{editSaving ? "Guardando..." : "Guardar cambios"}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

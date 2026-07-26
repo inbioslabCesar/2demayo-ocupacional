@@ -20,6 +20,7 @@ try {
         'abreviatura_profesional' => "ALTER TABLE medicos ADD COLUMN abreviatura_profesional VARCHAR(20) NOT NULL DEFAULT 'Dr(a).'",
         'colegio_sigla' => "ALTER TABLE medicos ADD COLUMN colegio_sigla VARCHAR(20) NULL",
         'nro_colegiatura' => "ALTER TABLE medicos ADD COLUMN nro_colegiatura VARCHAR(30) NULL",
+        'rna' => "ALTER TABLE medicos ADD COLUMN rna VARCHAR(30) NULL AFTER rne",
     ];
 
     foreach ($checks as $col => $sqlAlter) {
@@ -34,7 +35,7 @@ try {
         case 'GET':
             // Obtener información profesional completa del médico
             $stmt = $pdo->prepare("
-                 SELECT nombre, apellido, especialidad, cmp, rne, firma, email, tipo_profesional, abreviatura_profesional, colegio_sigla, nro_colegiatura 
+                 SELECT nombre, apellido, especialidad, cmp, rne, rna, firma, email, tipo_profesional, abreviatura_profesional, colegio_sigla, nro_colegiatura
                 FROM medicos 
                 WHERE id = ?
             ");
@@ -62,7 +63,7 @@ try {
             $params = [];
             
             // Campos que se pueden actualizar
-                $allowedFields = ['nombre', 'apellido', 'especialidad', 'cmp', 'rne', 'firma', 'tipo_profesional', 'abreviatura_profesional', 'colegio_sigla', 'nro_colegiatura'];
+                $allowedFields = ['nombre', 'apellido', 'especialidad', 'cmp', 'rne', 'rna', 'firma', 'tipo_profesional', 'abreviatura_profesional', 'colegio_sigla', 'nro_colegiatura'];
             
             foreach ($allowedFields as $field) {
                 if (isset($input[$field])) {
@@ -97,6 +98,13 @@ try {
                             // Validar formato RNE (solo números y letras, máximo 20 caracteres)
                             if (!empty($input[$field]) && !preg_match('/^[A-Za-z0-9]{1,20}$/', $input[$field])) {
                                 echo json_encode(['success' => false, 'error' => 'Formato de RNE inválido. Solo letras y números, máximo 20 caracteres.']);
+                                exit();
+                            }
+                            break;
+
+                        case 'rna':
+                            if (!empty($input[$field]) && !preg_match('/^[A-Za-z0-9\-]{1,30}$/', $input[$field])) {
+                                echo json_encode(['success' => false, 'error' => 'Formato de RNA inválido. Solo letras, números y guion, máximo 30 caracteres.']);
                                 exit();
                             }
                             break;

@@ -79,6 +79,7 @@ $requiredTables = [
     'ocupacional_protocolos_empresa',
     'ocupacional_protocolo_detalle',
     'ocupacional_protocolo_condiciones',
+    'ocupacional_catalogos_laborales_empresa',
     'pacientes_ocupacionales',
 ];
 
@@ -332,6 +333,52 @@ function parse_bool_proto($value)
     return in_array(strtolower(trim((string)$value)), ['1', 'true', 'si', 'yes', 'on'], true);
 }
 
+function get_empresa_condicion_proto($conn, $protocoloId, $catalogoId)
+{
+    $stmt = $conn->prepare('SELECT pe.empresa_id
+                            FROM ocupacional_protocolos_empresa pe
+                            INNER JOIN ocupacional_catalogo_empresas c ON c.empresa_id = pe.empresa_id
+                                                        INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
+                            WHERE pe.id = ?
+                              AND c.id = ?
+                              AND pe.estado = "activo"
+                              AND c.estado = "activo"
+                                                            AND e.estado = "activo"
+                            LIMIT 1');
+    if (!$stmt) {
+        return 0;
+    }
+    $stmt->bind_param('ii', $protocoloId, $catalogoId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return (int)($row['empresa_id'] ?? 0);
+}
+
+function get_puesto_canonico_condicion_proto($conn, $empresaId, $puestoTrabajo)
+{
+    $puestoTrabajo = trim((string)$puestoTrabajo);
+    if ($puestoTrabajo === '') {
+        return '';
+    }
+
+    $stmt = $conn->prepare('SELECT nombre
+                            FROM ocupacional_catalogos_laborales_empresa
+                            WHERE empresa_id = ?
+                              AND tipo = "puesto"
+                              AND estado = "activo"
+                              AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))
+                            LIMIT 1');
+    if (!$stmt) {
+        return null;
+    }
+    $stmt->bind_param('is', $empresaId, $puestoTrabajo);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return $row ? trim((string)$row['nombre']) : null;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     require_ocup_permiso_proto('gestionar_empresas_ocupacional');
 
@@ -493,8 +540,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         foreach ($items as &$row) {
             foreach ($tipos as $t) {
                 $row['montos'][(string)$t['id']] = [
-                    'valor' => number_format((float)($row['precio'] ?? 0), 2, '.', ''),
-                    'origen' => 'examen_general',
+                    'valor' => '',
+                    'origen' => 'sin_configurar',
                 ];
             }
         }
@@ -581,13 +628,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                                         WHERE pe.empresa_id = ?
                                             AND c.puesto_trabajo IS NOT NULL
                                             AND TRIM(c.puesto_trabajo) <> ""
+
+                                        UNION
+
+                                        SELECT cl.nombre AS puesto_trabajo
+                                        FROM ocupacional_catalogos_laborales_empresa cl
+                                        WHERE cl.empresa_id = ?
+                                            AND cl.tipo = "puesto"
+                                            AND cl.estado = "activo"
                                 ) t
                                 ORDER BY puesto_trabajo ASC';
         $stmt = $mysqliOcup->prepare($sql);
         if (!$stmt) {
             out_proto(500, ['success' => false, 'error' => 'No se pudo listar puestos']);
         }
-        $stmt->bind_param('ii', $empresaId, $empresaId);
+        $stmt->bind_param('iii', $empresaId, $empresaId, $empresaId);
         $stmt->execute();
         $res = $stmt->get_result();
         $rows = [];
@@ -606,6 +661,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $catalogoId = (int)($_GET['catalogo_id'] ?? 0);
         if ($protocoloId <= 0 || $catalogoId <= 0) {
             out_proto(422, ['success' => false, 'error' => 'protocolo_id y catalogo_id son obligatorios']);
+        }
+        if (get_empresa_condicion_proto($mysqliOcup, $protocoloId, $catalogoId) <= 0) {
+            out_proto(422, ['success' => false, 'error' => 'El protocolo y el examen no pertenecen a la misma empresa activa']);
         }
 
         $sql = 'SELECT id, protocolo_id, catalogo_id, puesto_trabajo, sexo, edad_min, edad_max, created_at, updated_at
@@ -660,7 +718,7 @@ if ($accion === 'guardar_protocolo') {
     $id = (int)($payload['id'] ?? 0);
     $empresaId = (int)($payload['empresa_id'] ?? 0);
     $descripcion = trim((string)($payload['descripcion'] ?? ''));
-    $sembrarMontosBase = parse_bool_proto($payload['sembrar_montos_base'] ?? true);
+    $sembrarMontosBase = parse_bool_proto($payload['sembrar_montos_base'] ?? false);
 
     if ($empresaId <= 0 || $descripcion === '') {
         out_proto(422, ['success' => false, 'error' => 'empresa_id y descripcion son obligatorios']);
@@ -999,21 +1057,19 @@ if ($accion === 'guardar_monto') {
                 'catalogo_id' => $catalogoId,
                 'tipo_evaluacion_id' => $tipoEvaluacionId,
                 'monto' => '',
-                'origen' => 'examen_general',
+                'origen' => 'sin_configurar',
             ],
         ]);
     }
 
     if ($montoRaw === '') {
-        $stmtUpZero = $mysqliOcup->prepare('INSERT INTO ocupacional_protocolo_detalle (protocolo_id, catalogo_id, tipo_evaluacion_id, monto, created_by, updated_by)
-                                            VALUES (?, ?, ?, 0, ?, ?)
-                                            ON DUPLICATE KEY UPDATE monto = 0, updated_by = VALUES(updated_by), updated_at = NOW()');
-        if (!$stmtUpZero) {
-            out_proto(500, ['success' => false, 'error' => 'No se pudo excluir examen del protocolo']);
+        $stmtDel = $mysqliOcup->prepare('DELETE FROM ocupacional_protocolo_detalle WHERE protocolo_id = ? AND catalogo_id = ? AND tipo_evaluacion_id = ? LIMIT 1');
+        if (!$stmtDel) {
+            out_proto(500, ['success' => false, 'error' => 'No se pudo quitar monto del protocolo']);
         }
-        $stmtUpZero->bind_param('iiiii', $protocoloId, $catalogoId, $tipoEvaluacionId, $usuarioId, $usuarioId);
-        $stmtUpZero->execute();
-        $stmtUpZero->close();
+        $stmtDel->bind_param('iii', $protocoloId, $catalogoId, $tipoEvaluacionId);
+        $stmtDel->execute();
+        $stmtDel->close();
 
         out_proto(200, [
             'success' => true,
@@ -1022,7 +1078,7 @@ if ($accion === 'guardar_monto') {
                 'catalogo_id' => $catalogoId,
                 'tipo_evaluacion_id' => $tipoEvaluacionId,
                 'monto' => '',
-                'origen' => 'protocolo_excluido',
+                'origen' => 'sin_configurar',
             ],
         ]);
     }
@@ -1053,6 +1109,7 @@ if ($accion === 'guardar_monto') {
             'catalogo_id' => $catalogoId,
             'tipo_evaluacion_id' => $tipoEvaluacionId,
             'monto' => number_format($monto, 2, '.', ''),
+            'origen' => 'protocolo',
         ],
     ]);
 }
@@ -1069,6 +1126,17 @@ if ($accion === 'guardar_condicion') {
     if ($protocoloId <= 0 || $catalogoId <= 0) {
         out_proto(422, ['success' => false, 'error' => 'protocolo_id y catalogo_id son obligatorios']);
     }
+
+    $empresaCondicionId = get_empresa_condicion_proto($mysqliOcup, $protocoloId, $catalogoId);
+    if ($empresaCondicionId <= 0) {
+        out_proto(422, ['success' => false, 'error' => 'El protocolo y el examen no pertenecen a la misma empresa activa']);
+    }
+
+    $puestoCanonico = get_puesto_canonico_condicion_proto($mysqliOcup, $empresaCondicionId, $puestoTrabajo);
+    if ($puestoTrabajo !== '' && $puestoCanonico === null) {
+        out_proto(422, ['success' => false, 'error' => 'El puesto no pertenece al catalogo activo de la empresa']);
+    }
+    $puestoTrabajo = $puestoCanonico === null ? '' : $puestoCanonico;
 
     if ($sexo !== '' && $sexo !== 'M' && $sexo !== 'F') {
         out_proto(422, ['success' => false, 'error' => 'sexo invalido']);
@@ -1104,9 +1172,6 @@ if ($accion === 'guardar_condicion') {
         out_proto(422, ['success' => false, 'error' => 'edad_min no puede ser mayor que edad_max']);
     }
 
-        $edadMinCmp = $edadMin === null ? -1 : $edadMin;
-        $edadMaxCmp = $edadMax === null ? -1 : $edadMax;
-
     $puestoSave = $puestoTrabajo === '' ? null : $puestoTrabajo;
     $sexoSave = $sexo === '' ? null : $sexo;
 
@@ -1127,13 +1192,16 @@ if ($accion === 'guardar_condicion') {
                                                                                          FROM ocupacional_protocolo_condiciones
                                                                                          WHERE protocolo_id = ?
                                                                                              AND catalogo_id = ?
-                                                                                             AND COALESCE(puesto_trabajo, "") = ?
+                                                                                             AND puesto_trabajo <=> ?
+                                                                                             AND sexo <=> ?
+                                                                                             AND edad_min <=> ?
+                                                                                             AND edad_max <=> ?
                                                                                              AND id <> ?
                                                                                          LIMIT 1');
             if (!$stmtDup) {
                 out_proto(500, ['success' => false, 'error' => 'No se pudo validar duplicidad de condicion']);
             }
-                        $stmtDup->bind_param('iisi', $protocoloId, $catalogoId, $puestoTrabajo, $id);
+            $stmtDup->bind_param('iissiii', $protocoloId, $catalogoId, $puestoSave, $sexoSave, $edadMin, $edadMax, $id);
             $stmtDup->execute();
             $dup = $stmtDup->get_result()->fetch_assoc();
             $stmtDup->close();
@@ -1169,12 +1237,15 @@ if ($accion === 'guardar_condicion') {
                                                                                  FROM ocupacional_protocolo_condiciones
                                                                                  WHERE protocolo_id = ?
                                                                                      AND catalogo_id = ?
-                                                                                     AND COALESCE(puesto_trabajo, "") = ?
+                                                                                     AND puesto_trabajo <=> ?
+                                                                                     AND sexo <=> ?
+                                                                                     AND edad_min <=> ?
+                                                                                     AND edad_max <=> ?
                                                                                  LIMIT 1');
         if (!$stmtDup) {
             out_proto(500, ['success' => false, 'error' => 'No se pudo validar condicion']);
         }
-                $stmtDup->bind_param('iis', $protocoloId, $catalogoId, $puestoTrabajo);
+            $stmtDup->bind_param('iissii', $protocoloId, $catalogoId, $puestoSave, $sexoSave, $edadMin, $edadMax);
         $stmtDup->execute();
         $dup = $stmtDup->get_result()->fetch_assoc();
         $stmtDup->close();
@@ -1277,6 +1348,12 @@ if ($accion === 'aplicar_condicion_masiva') {
         out_proto(422, ['success' => false, 'error' => 'protocolo_id no corresponde a la empresa']);
     }
 
+    $puestoCanonico = get_puesto_canonico_condicion_proto($mysqliOcup, $empresaId, $puestoTrabajo);
+    if ($puestoTrabajo !== '' && $puestoCanonico === null) {
+        out_proto(422, ['success' => false, 'error' => 'El puesto no pertenece al catalogo activo de la empresa']);
+    }
+    $puestoTrabajo = $puestoCanonico === null ? '' : $puestoCanonico;
+
     $term = '%' . $filtroQ . '%';
     $stmtIds = $mysqliOcup->prepare('SELECT c.id AS catalogo_id
                                      FROM ocupacional_catalogo_empresas c
@@ -1326,12 +1403,15 @@ if ($accion === 'aplicar_condicion_masiva') {
 
     $puestoSave = $puestoTrabajo === '' ? null : $puestoTrabajo;
     $sexoSave = $sexo === '' ? null : $sexo;
-    $stmtDup = $mysqliOcup->prepare('SELECT id
-                                     FROM ocupacional_protocolo_condiciones
-                                     WHERE protocolo_id = ?
-                                       AND catalogo_id = ?
-                                       AND COALESCE(puesto_trabajo, "") = ?
-                                     LIMIT 1');
+        $stmtDup = $mysqliOcup->prepare('SELECT id
+                                                                         FROM ocupacional_protocolo_condiciones
+                                                                         WHERE protocolo_id = ?
+                                                                             AND catalogo_id = ?
+                                                                             AND puesto_trabajo <=> ?
+                                                                             AND sexo <=> ?
+                                                                             AND edad_min <=> ?
+                                                                             AND edad_max <=> ?
+                                                                         LIMIT 1');
     if (!$stmtDup) {
         out_proto(500, ['success' => false, 'error' => 'No se pudo preparar validacion de duplicidad']);
     }
@@ -1351,8 +1431,7 @@ if ($accion === 'aplicar_condicion_masiva') {
     foreach ($catalogoIds as $catalogoId) {
         $considerados++;
 
-        $puestoCmp = $puestoTrabajo;
-        $stmtDup->bind_param('iis', $protocoloId, $catalogoId, $puestoCmp);
+        $stmtDup->bind_param('iissii', $protocoloId, $catalogoId, $puestoSave, $sexoSave, $edadMin, $edadMax);
         $stmtDup->execute();
         $dup = $stmtDup->get_result()->fetch_assoc();
         if ($dup) {
@@ -1393,15 +1472,19 @@ if ($accion === 'aplicar_condicion_masiva') {
 
 if ($accion === 'eliminar_condicion') {
     $id = (int)($payload['id'] ?? 0);
-    if ($id <= 0) {
-        out_proto(422, ['success' => false, 'error' => 'id es obligatorio']);
+    $protocoloId = (int)($payload['protocolo_id'] ?? 0);
+    $catalogoId = (int)($payload['catalogo_id'] ?? 0);
+    if ($id <= 0 || $protocoloId <= 0 || $catalogoId <= 0) {
+        out_proto(422, ['success' => false, 'error' => 'id, protocolo_id y catalogo_id son obligatorios']);
     }
 
-    $stmt = $mysqliOcup->prepare('DELETE FROM ocupacional_protocolo_condiciones WHERE id = ? LIMIT 1');
+    $stmt = $mysqliOcup->prepare('DELETE FROM ocupacional_protocolo_condiciones
+                                  WHERE id = ? AND protocolo_id = ? AND catalogo_id = ?
+                                  LIMIT 1');
     if (!$stmt) {
         out_proto(500, ['success' => false, 'error' => 'No se pudo eliminar condicion']);
     }
-    $stmt->bind_param('i', $id);
+    $stmt->bind_param('iii', $id, $protocoloId, $catalogoId);
     $stmt->execute();
     $affected = (int)$stmt->affected_rows;
     $stmt->close();

@@ -324,8 +324,8 @@ export default function EmpresasOcupacionalesPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => navegarAccionEmpresa("/salud-ocupacional/trabajadores", item.id, "areas")}
-                        title="Gestionar areas desde trabajadores"
+                        onClick={() => navegarAccionEmpresa("/salud-ocupacional/catalogos-laborales", item.id, "area")}
+                        title="Gestionar áreas de la empresa"
                         className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
                       >
                         Área
@@ -333,8 +333,8 @@ export default function EmpresasOcupacionalesPage() {
 
                       <button
                         type="button"
-                        onClick={() => navegarAccionEmpresa("/salud-ocupacional/trabajadores", item.id, "puestos")}
-                        title="Gestionar puestos desde trabajadores"
+                        onClick={() => navegarAccionEmpresa("/salud-ocupacional/catalogos-laborales", item.id, "puesto")}
+                        title="Gestionar puestos de la empresa"
                         className="rounded bg-cyan-600 px-2 py-1 text-xs font-semibold text-white hover:bg-cyan-700"
                       >
                         Puesto

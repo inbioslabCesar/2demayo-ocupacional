@@ -382,7 +382,7 @@ const MedicoFormModal = ({
                   <h4 className="text-lg font-semibold text-gray-800">Códigos Profesionales</h4>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
                       <span className="flex items-center gap-2">
@@ -452,6 +452,22 @@ const MedicoFormModal = ({
                     />
                     <p className="text-xs text-gray-500 mt-1">Registro de especialidad, cuando exista.</p>
                   </div>
+
+                  {esMedico && (
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">R.N.A. (opcional)</label>
+                      <input
+                        type="text"
+                        name="rna"
+                        value={formData.rna || ''}
+                        onChange={onChange}
+                        className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                        placeholder="Ej: 549"
+                        maxLength={30}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Registro adicional, cuando corresponda.</p>
+                    </div>
+                  )}
                 </div>
               </div>
               

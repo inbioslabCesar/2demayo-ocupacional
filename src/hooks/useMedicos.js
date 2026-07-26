@@ -19,6 +19,7 @@ const EMPTY_MEDICO_FORM = {
   password: '',
   cmp: '',
   rne: '',
+  rna: '',
   firma: null,
   modalidad_pago: 'acto',
   monto_hora: '',
@@ -253,6 +254,7 @@ const useMedicos = () => {
       password: '',
       cmp: medico.cmp || '',
       rne: medico.rne || '',
+      rna: medico.rna || '',
       firma: medico.firma || null,
       modalidad_pago: medico.modalidad_pago || 'acto',
       monto_hora: medico.monto_hora ?? '',
@@ -303,6 +305,7 @@ const useMedicos = () => {
       String(medico.email || '').toLowerCase().includes(searchTerm) ||
       String(medico.cmp || '').toLowerCase().includes(searchTerm) ||
       String(medico.rne || '').toLowerCase().includes(searchTerm) ||
+      String(medico.rna || '').toLowerCase().includes(searchTerm) ||
       String(medico.nro_colegiatura || '').toLowerCase().includes(searchTerm) ||
       String(medico.celular || '').toLowerCase().includes(searchTerm) ||
       String(medico.telefono || '').toLowerCase().includes(searchTerm) ||

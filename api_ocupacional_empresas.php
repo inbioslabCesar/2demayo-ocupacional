@@ -224,7 +224,40 @@ function requireEmpresaLegacySchema($conn)
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     requireOcupPermiso('gestionar_empresas_ocupacional');
 
+    $accion = trim((string) ($_GET['accion'] ?? 'listar'));
     $estado = trim((string) ($_GET['estado'] ?? 'activo'));
+    if ($accion === 'catalogo') {
+        if ($estado !== 'activo' && $estado !== 'inactivo' && $estado !== 'todos') {
+            out(422, ['success' => false, 'error' => 'Filtro estado invalido']);
+        }
+
+        $whereCatalogo = $estado === 'todos' ? '' : ' WHERE estado = ?';
+        $stmtCatalogo = $mysqliOcup->prepare(
+            'SELECT id, ruc, razon_social, estado FROM empresas_ocupacionales'
+            . $whereCatalogo
+            . ' ORDER BY razon_social ASC, id DESC'
+        );
+        if (!$stmtCatalogo) {
+            out(500, ['success' => false, 'error' => 'No se pudo preparar catalogo de empresas']);
+        }
+        if ($estado !== 'todos') {
+            $stmtCatalogo->bind_param('s', $estado);
+        }
+        $stmtCatalogo->execute();
+        $resCatalogo = $stmtCatalogo->get_result();
+        $rowsCatalogo = [];
+        while ($row = $resCatalogo->fetch_assoc()) {
+            $rowsCatalogo[] = [
+                'id' => (int) $row['id'],
+                'ruc' => (string) $row['ruc'],
+                'razon_social' => (string) $row['razon_social'],
+                'estado' => (string) $row['estado'],
+            ];
+        }
+        $stmtCatalogo->close();
+        out(200, ['success' => true, 'data' => $rowsCatalogo]);
+    }
+
     $q = trim((string) ($_GET['q'] ?? ''));
     $page = (int) ($_GET['page'] ?? 1);
     $perPage = (int) ($_GET['per_page'] ?? 20);

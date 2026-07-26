@@ -145,6 +145,15 @@ function resolve_extra_columns_orden($conn)
         'gestante' => false,
         'documento' => false,
         'indica_dr' => false,
+        'medico_responsable_id' => false,
+        'medico_nombre_snapshot' => false,
+        'medico_especialidad_snapshot' => false,
+        'medico_cmp_snapshot' => false,
+        'medico_rne_snapshot' => false,
+        'medico_rna_snapshot' => false,
+        'medico_firma_snapshot' => false,
+        'aptitud_registrada_by' => false,
+        'aptitud_registrada_at' => false,
     ];
 
     foreach ($cols as $name => $_) {
@@ -157,6 +166,60 @@ function resolve_extra_columns_orden($conn)
 function normalize_text_orden($value)
 {
     return strtoupper(trim((string)$value));
+}
+
+function require_medico_responsable_orden($mysqliCore, $medicoId)
+{
+    $id = (int)$medicoId;
+    if ($id <= 0) {
+        out_orden(422, ['success' => false, 'error' => 'medico_responsable_id es obligatorio']);
+    }
+
+    $stmt = $mysqliCore->prepare('SELECT id, nombre, apellido, especialidad, cmp, rne, rna, firma,
+                                         tipo_profesional, abreviatura_profesional, nro_colegiatura
+                                  FROM medicos
+                                  WHERE id = ? LIMIT 1');
+    if (!$stmt) {
+        out_orden(500, ['success' => false, 'error' => 'No se pudo validar medico responsable']);
+    }
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
+    $medico = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    if (!$medico) {
+        out_orden(422, ['success' => false, 'error' => 'Medico responsable no encontrado']);
+    }
+    if (strtolower(trim((string)($medico['tipo_profesional'] ?? 'medico'))) !== 'medico') {
+        out_orden(422, ['success' => false, 'error' => 'El responsable debe estar registrado como medico']);
+    }
+
+    $cmp = trim((string)($medico['cmp'] ?? ''));
+    if ($cmp === '') {
+        $cmp = trim((string)($medico['nro_colegiatura'] ?? ''));
+    }
+    if ($cmp === '') {
+        out_orden(422, ['success' => false, 'error' => 'El medico responsable no tiene CMP registrado']);
+    }
+
+    $firma = trim((string)($medico['firma'] ?? ''));
+    if ($firma === '') {
+        out_orden(422, ['success' => false, 'error' => 'El medico responsable no tiene firma registrada']);
+    }
+
+    $abreviatura = trim((string)($medico['abreviatura_profesional'] ?? ''));
+    $nombre = trim($abreviatura . ' ' . trim((string)($medico['nombre'] ?? '') . ' ' . (string)($medico['apellido'] ?? '')));
+
+    return [
+        'id' => (int)$medico['id'],
+        'nombre' => $nombre,
+        'apellido' => trim((string)($medico['apellido'] ?? '')),
+        'especialidad' => trim((string)($medico['especialidad'] ?? '')),
+        'cmp' => $cmp,
+        'rne' => trim((string)($medico['rne'] ?? '')),
+        'rna' => trim((string)($medico['rna'] ?? '')),
+        'firma' => $firma,
+    ];
 }
 
 function calculate_age_orden($fechaNacimiento)
@@ -201,15 +264,92 @@ function registrar_evento_orden($mysqliOcup, $ordenId, $tipo, $descripcion, $usu
     $stmt->close();
 }
 
+function get_resumen_clinico_orden($mysqliOcup, $ordenId)
+{
+    $stmt = $mysqliOcup->prepare('SELECT
+                                    COUNT(*) AS total,
+                                    SUM(CASE WHEN d.estado_ejecucion = "observado" THEN 1 ELSE 0 END) AS observados,
+                                    SUM(CASE WHEN d.estado_ejecucion = "realizado"
+                                              AND EXISTS (
+                                                  SELECT 1
+                                                  FROM ocupacional_resultados_clinicos rc
+                                                  WHERE rc.orden_detalle_id = d.id
+                                                    AND rc.estado = "finalizado"
+                                              )
+                                             THEN 1 ELSE 0 END) AS finalizados
+                                  FROM ocupacional_orden_detalle d
+                                  WHERE d.orden_id = ?');
+    if (!$stmt) {
+        return null;
+    }
+    $stmt->bind_param('i', $ordenId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    $interconsultasAbiertas = 0;
+    if (table_exists_orden($mysqliOcup, 'ocupacional_interconsultas')) {
+        $stmtInter = $mysqliOcup->prepare('SELECT COUNT(*) AS total
+                                           FROM ocupacional_interconsultas
+                                           WHERE orden_id = ? AND estado IN ("solicitada", "respondida")');
+        if (!$stmtInter) {
+            return null;
+        }
+        $stmtInter->bind_param('i', $ordenId);
+        $stmtInter->execute();
+        $interconsultasAbiertas = (int)($stmtInter->get_result()->fetch_assoc()['total'] ?? 0);
+        $stmtInter->close();
+    }
+
+    return [
+        'total' => (int)($row['total'] ?? 0),
+        'observados' => (int)($row['observados'] ?? 0),
+        'finalizados' => (int)($row['finalizados'] ?? 0),
+        'interconsultas_abiertas' => $interconsultasAbiertas,
+    ];
+}
+
+function require_orden_clinicamente_finalizada($mysqliOcup, $ordenId)
+{
+    $resumen = get_resumen_clinico_orden($mysqliOcup, $ordenId);
+    if ($resumen === null) {
+        out_orden(500, ['success' => false, 'error' => 'No se pudo validar resultados clinicos de la orden']);
+    }
+    if ($resumen['total'] <= 0) {
+        out_orden(422, ['success' => false, 'error' => 'La orden no tiene examenes para validar']);
+    }
+    if ($resumen['observados'] > 0) {
+        out_orden(422, ['success' => false, 'error' => 'No se puede continuar. La orden tiene examenes observados pendientes de resolver']);
+    }
+    if ($resumen['interconsultas_abiertas'] > 0) {
+        out_orden(422, ['success' => false, 'error' => 'No se puede continuar. La orden tiene interconsultas pendientes de levantar']);
+    }
+    if ($resumen['finalizados'] < $resumen['total']) {
+        $faltantes = $resumen['total'] - $resumen['finalizados'];
+        out_orden(422, [
+            'success' => false,
+            'error' => 'No se puede continuar. Faltan ' . $faltantes . ' resultado(s) clinico(s) finalizado(s)',
+        ]);
+    }
+
+    return $resumen;
+}
+
 function sync_estado_orden_por_detalle($mysqliOcup, $ordenId, $usuarioId)
 {
     $stmt = $mysqliOcup->prepare('SELECT
                                     COUNT(*) AS total,
-                                    SUM(CASE WHEN estado_ejecucion = "pendiente" THEN 1 ELSE 0 END) AS pendientes,
-                                    SUM(CASE WHEN estado_ejecucion = "en_proceso" THEN 1 ELSE 0 END) AS en_proceso,
-                                    SUM(CASE WHEN estado_ejecucion IN ("realizado", "observado") THEN 1 ELSE 0 END) AS completados
-                                  FROM ocupacional_orden_detalle
-                                  WHERE orden_id = ?');
+                                    SUM(CASE WHEN d.estado_ejecucion = "pendiente" THEN 1 ELSE 0 END) AS pendientes,
+                                    SUM(CASE WHEN d.estado_ejecucion = "realizado"
+                                              AND EXISTS (
+                                                  SELECT 1
+                                                  FROM ocupacional_resultados_clinicos rc
+                                                  WHERE rc.orden_detalle_id = d.id
+                                                    AND rc.estado = "finalizado"
+                                              )
+                                             THEN 1 ELSE 0 END) AS completados
+                                  FROM ocupacional_orden_detalle d
+                                  WHERE d.orden_id = ?');
     if (!$stmt) {
         return;
     }
@@ -220,13 +360,12 @@ function sync_estado_orden_por_detalle($mysqliOcup, $ordenId, $usuarioId)
 
     $total = (int)($agg['total'] ?? 0);
     $pendientes = (int)($agg['pendientes'] ?? 0);
-    $enProceso = (int)($agg['en_proceso'] ?? 0);
     $completados = (int)($agg['completados'] ?? 0);
 
     $nuevoEstado = 'emitida';
     if ($total > 0 && $completados >= $total) {
         $nuevoEstado = 'completada';
-    } elseif (($total - $pendientes) > 0 || $enProceso > 0) {
+    } elseif (($total - $pendientes) > 0) {
         $nuevoEstado = 'en_proceso';
     }
 
@@ -419,14 +558,13 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
             if ($ok && $cond['sexo'] !== '' && $cond['sexo'] !== $sexoPaciente) {
                 $ok = false;
             }
-            // Compatibilidad legacy: edadminimo >= edad y edadmaximo <= edad.
             if ($ok && $cond['edad_min'] !== null) {
-                if ($edadPaciente === null || $edadPaciente > $cond['edad_min']) {
+                if ($edadPaciente === null || $edadPaciente < $cond['edad_min']) {
                     $ok = false;
                 }
             }
             if ($ok && $cond['edad_max'] !== null) {
-                if ($edadPaciente === null || $edadPaciente < $cond['edad_max']) {
+                if ($edadPaciente === null || $edadPaciente > $cond['edad_max']) {
                     $ok = false;
                 }
             }
@@ -483,6 +621,24 @@ foreach ($requiredTables as $table) {
 }
 
 $ordenExtraColumns = resolve_extra_columns_orden($mysqliOcup);
+$medicoSnapshotColumns = [
+    'medico_responsable_id',
+    'medico_nombre_snapshot',
+    'medico_especialidad_snapshot',
+    'medico_cmp_snapshot',
+    'medico_rne_snapshot',
+    'medico_rna_snapshot',
+    'medico_firma_snapshot',
+    'aptitud_registrada_by',
+    'aptitud_registrada_at',
+];
+$medicoSnapshotReady = true;
+foreach ($medicoSnapshotColumns as $columnName) {
+    if (empty($ordenExtraColumns[$columnName])) {
+        $medicoSnapshotReady = false;
+        break;
+    }
+}
 
 $sqlExprSubcontrataIdOrden = !empty($ordenExtraColumns['subcontrata_empresa_id']) ? 'o.subcontrata_empresa_id' : 'NULL';
 $sqlExprFacturarIdOrden = !empty($ordenExtraColumns['facturar_empresa_id']) ? 'o.facturar_empresa_id' : 'NULL';
@@ -491,6 +647,15 @@ $sqlExprModoOrden = !empty($ordenExtraColumns['modo']) ? 'o.modo' : 'NULL';
 $sqlExprGestanteOrden = !empty($ordenExtraColumns['gestante']) ? 'o.gestante' : 'NULL';
 $sqlExprDocumentoOrden = !empty($ordenExtraColumns['documento']) ? 'o.documento' : 'NULL';
 $sqlExprIndicaDrOrden = !empty($ordenExtraColumns['indica_dr']) ? 'o.indica_dr' : 'NULL';
+$sqlExprMedicoResponsableIdOrden = !empty($ordenExtraColumns['medico_responsable_id']) ? 'o.medico_responsable_id' : 'NULL';
+$sqlExprMedicoNombreSnapshotOrden = !empty($ordenExtraColumns['medico_nombre_snapshot']) ? 'o.medico_nombre_snapshot' : 'NULL';
+$sqlExprMedicoEspecialidadSnapshotOrden = !empty($ordenExtraColumns['medico_especialidad_snapshot']) ? 'o.medico_especialidad_snapshot' : 'NULL';
+$sqlExprMedicoCmpSnapshotOrden = !empty($ordenExtraColumns['medico_cmp_snapshot']) ? 'o.medico_cmp_snapshot' : 'NULL';
+$sqlExprMedicoRneSnapshotOrden = !empty($ordenExtraColumns['medico_rne_snapshot']) ? 'o.medico_rne_snapshot' : 'NULL';
+$sqlExprMedicoRnaSnapshotOrden = !empty($ordenExtraColumns['medico_rna_snapshot']) ? 'o.medico_rna_snapshot' : 'NULL';
+$sqlExprMedicoFirmaSnapshotOrden = !empty($ordenExtraColumns['medico_firma_snapshot']) ? 'o.medico_firma_snapshot' : 'NULL';
+$sqlExprAptitudRegistradaByOrden = !empty($ordenExtraColumns['aptitud_registrada_by']) ? 'o.aptitud_registrada_by' : 'NULL';
+$sqlExprAptitudRegistradaAtOrden = !empty($ordenExtraColumns['aptitud_registrada_at']) ? 'o.aptitud_registrada_at' : 'NULL';
 $sqlJoinSubcontrataOrden = !empty($ordenExtraColumns['subcontrata_empresa_id'])
     ? ' LEFT JOIN empresas_ocupacionales esub ON esub.id = o.subcontrata_empresa_id'
     : '';
@@ -645,6 +810,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         e.razon_social,
                         IFNULL(esub.razon_social, "") AS subcontrata_razon_social,
                         IFNULL(efac.razon_social, "") AS facturar_razon_social,
+                        t.external_patient_id,
                         t.documento_numero,
                         t.puesto_trabajo,
                         p.descripcion AS protocolo_descripcion,
@@ -665,8 +831,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         SELECT
                             orden_id,
                             COUNT(*) AS total_items,
-                            SUM(CASE WHEN estado_ejecucion IN ("realizado", "observado") THEN 1 ELSE 0 END) AS total_completados
-                        FROM ocupacional_orden_detalle
+                            SUM(CASE WHEN od.estado_ejecucion = "realizado"
+                                      AND EXISTS (
+                                          SELECT 1
+                                          FROM ocupacional_resultados_clinicos rc
+                                          WHERE rc.orden_detalle_id = od.id
+                                            AND rc.estado = "finalizado"
+                                      )
+                                     THEN 1 ELSE 0 END) AS total_completados
+                        FROM ocupacional_orden_detalle od
                         GROUP BY orden_id
                     ) d ON d.orden_id = o.id
                     LEFT JOIN (
@@ -711,6 +884,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'gestante' => isset($r['gestante']) ? (int)$r['gestante'] : 0,
                 'documento' => (string)($r['documento'] ?? ''),
                 'indica_dr' => (string)($r['indica_dr'] ?? ''),
+                '_external_patient_id' => (int)($r['external_patient_id'] ?? 0),
                 'documento_numero' => (string)($r['documento_numero'] ?? ''),
                 'puesto_trabajo' => (string)($r['puesto_trabajo'] ?? ''),
                 'protocolo_descripcion' => (string)($r['protocolo_descripcion'] ?? ''),
@@ -722,6 +896,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             ];
         }
         $stmtRows->close();
+
+        $patientIds = array_values(array_unique(array_filter(array_column($rows, '_external_patient_id'))));
+        $patientNames = [];
+        if (!empty($patientIds)) {
+            $placeholders = implode(',', array_fill(0, count($patientIds), '?'));
+            $stmtPatients = $mysqli->prepare('SELECT id, nombre, apellido FROM pacientes WHERE id IN (' . $placeholders . ')');
+            if ($stmtPatients) {
+                bind_params_dynamic_orden($stmtPatients, str_repeat('i', count($patientIds)), $patientIds);
+                $stmtPatients->execute();
+                $resPatients = $stmtPatients->get_result();
+                while ($patient = $resPatients->fetch_assoc()) {
+                    $patientNames[(int)$patient['id']] = trim((string)($patient['nombre'] ?? '') . ' ' . (string)($patient['apellido'] ?? ''));
+                }
+                $stmtPatients->close();
+            }
+        }
+        foreach ($rows as &$row) {
+            $externalPatientId = (int)($row['_external_patient_id'] ?? 0);
+            $row['paciente_nombre_completo'] = (string)($patientNames[$externalPatientId] ?? '');
+            unset($row['_external_patient_id']);
+        }
+        unset($row);
 
         out_orden(200, [
             'success' => true,
@@ -923,8 +1119,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     SELECT
                         orden_id,
                         COUNT(*) AS total_items,
-                        SUM(CASE WHEN estado_ejecucion IN ("realizado", "observado") THEN 1 ELSE 0 END) AS total_completados
-                    FROM ocupacional_orden_detalle
+                        SUM(CASE WHEN od.estado_ejecucion = "realizado"
+                                  AND EXISTS (
+                                      SELECT 1
+                                      FROM ocupacional_resultados_clinicos rc
+                                      WHERE rc.orden_detalle_id = od.id
+                                        AND rc.estado = "finalizado"
+                                  )
+                                 THEN 1 ELSE 0 END) AS total_completados
+                    FROM ocupacional_orden_detalle od
                     GROUP BY orden_id
                 ) d ON d.orden_id = o.id'
                 . $whereSql
@@ -1000,6 +1203,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                                             o.restriccion_final,
                                             o.recomendacion_final,
                                             o.medico_responsable,
+                                            ' . $sqlExprMedicoResponsableIdOrden . ' AS medico_responsable_id,
+                                            ' . $sqlExprMedicoNombreSnapshotOrden . ' AS medico_nombre_snapshot,
+                                            ' . $sqlExprMedicoEspecialidadSnapshotOrden . ' AS medico_especialidad_snapshot,
+                                            ' . $sqlExprMedicoCmpSnapshotOrden . ' AS medico_cmp_snapshot,
+                                            ' . $sqlExprMedicoRneSnapshotOrden . ' AS medico_rne_snapshot,
+                                            ' . $sqlExprMedicoRnaSnapshotOrden . ' AS medico_rna_snapshot,
+                                            ' . $sqlExprMedicoFirmaSnapshotOrden . ' AS medico_firma_snapshot,
+                                            ' . $sqlExprAptitudRegistradaByOrden . ' AS aptitud_registrada_by,
+                                            ' . $sqlExprAptitudRegistradaAtOrden . ' AS aptitud_registrada_at,
                                             e.razon_social AS empresa,
                                             IFNULL(esub.razon_social, "") AS subcontrata_razon_social,
                                             IFNULL(efac.razon_social, "") AS facturar_razon_social,
@@ -1031,11 +1243,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             out_orden(404, ['success' => false, 'error' => 'Orden no encontrada']);
         }
 
+        $medicoRnaVigente = '';
+        $medicoResponsableId = (int)($cab['medico_responsable_id'] ?? 0);
+        if (trim((string)($cab['medico_rna_snapshot'] ?? '')) === '' && $medicoResponsableId > 0) {
+            $stmtMedicoRna = $mysqli->prepare('SELECT rna FROM medicos WHERE id = ? LIMIT 1');
+            if ($stmtMedicoRna) {
+                $stmtMedicoRna->bind_param('i', $medicoResponsableId);
+                $stmtMedicoRna->execute();
+                $medicoRna = $stmtMedicoRna->get_result()->fetch_assoc();
+                $stmtMedicoRna->close();
+                $medicoRnaVigente = trim((string)($medicoRna['rna'] ?? ''));
+            }
+        }
+
         $pacienteNombreCompleto = '';
         $pacienteHistoriaClinica = '';
+        $pacienteSexo = '';
+        $pacienteFechaNacimiento = '';
+        $pacienteEdad = null;
         $externalPatientId = (int)($cab['external_patient_id'] ?? 0);
         if ($externalPatientId > 0) {
-            $stmtPac = $mysqli->prepare('SELECT nombre, apellido, historia_clinica FROM pacientes WHERE id = ? LIMIT 1');
+            $stmtPac = $mysqli->prepare('SELECT nombre, apellido, historia_clinica, sexo, fecha_nacimiento FROM pacientes WHERE id = ? LIMIT 1');
             if ($stmtPac) {
                 $stmtPac->bind_param('i', $externalPatientId);
                 $stmtPac->execute();
@@ -1044,23 +1272,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 if ($pac) {
                     $pacienteNombreCompleto = trim((string)($pac['nombre'] ?? '') . ' ' . (string)($pac['apellido'] ?? ''));
                     $pacienteHistoriaClinica = trim((string)($pac['historia_clinica'] ?? ''));
+                    $pacienteSexo = trim((string)($pac['sexo'] ?? ''));
+                    $pacienteFechaNacimiento = trim((string)($pac['fecha_nacimiento'] ?? ''));
+                    $pacienteEdad = calculate_age_orden($pacienteFechaNacimiento);
                 }
             }
         }
 
-        $stmtDet = $mysqliOcup->prepare('SELECT
-                                            id,
-                                            catalogo_id,
-                                            examen_id,
-                                            examen_codigo,
-                                            examen_descripcion,
-                                                          monto,
-                                                          estado_ejecucion,
-                                                          observacion_ejecucion,
-                                                          fecha_ejecucion
-                                         FROM ocupacional_orden_detalle
-                                         WHERE orden_id = ?
-                                         ORDER BY id ASC');
+                $stmtDet = $mysqliOcup->prepare('SELECT
+                                                                                        d.id,
+                                                                                        d.catalogo_id,
+                                                                                        d.examen_id,
+                                                                                        d.examen_codigo,
+                                                                                        d.examen_descripcion,
+                                                                                        d.monto,
+                                                                                        d.estado_ejecucion,
+                                                                                        d.observacion_ejecucion,
+                                                                                        d.fecha_ejecucion,
+                                                                                        EXISTS (
+                                                                                                SELECT 1
+                                                                                                FROM ocupacional_resultados_clinicos rc
+                                                                                                WHERE rc.orden_detalle_id = d.id
+                                                                                                    AND rc.estado = "finalizado"
+                                                                                        ) AS resultado_finalizado
+                                                                                 FROM ocupacional_orden_detalle d
+                                                                                 WHERE d.orden_id = ?
+                                                                                 ORDER BY d.id ASC');
         if (!$stmtDet) {
             out_orden(500, ['success' => false, 'error' => 'No se pudo consultar detalle de orden']);
         }
@@ -1080,6 +1317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'estado_ejecucion' => (string)($d['estado_ejecucion'] ?? 'pendiente'),
                 'observacion_ejecucion' => (string)($d['observacion_ejecucion'] ?? ''),
                 'fecha_ejecucion' => (string)($d['fecha_ejecucion'] ?? ''),
+                'resultado_finalizado' => (int)($d['resultado_finalizado'] ?? 0) === 1,
             ];
         }
         $stmtDet->close();
@@ -1087,7 +1325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $totalItems = count($detalles);
         $totalCompletados = 0;
         foreach ($detalles as $itemDet) {
-            if (in_array((string)$itemDet['estado_ejecucion'], ['realizado', 'observado'], true)) {
+            if ((string)$itemDet['estado_ejecucion'] === 'realizado' && $itemDet['resultado_finalizado']) {
                 $totalCompletados++;
             }
         }
@@ -1143,9 +1381,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'restriccion_final' => (string)($cab['restriccion_final'] ?? ''),
                 'recomendacion_final' => (string)($cab['recomendacion_final'] ?? ''),
                 'medico_responsable' => (string)($cab['medico_responsable'] ?? ''),
+                'medico_responsable_id' => (int)($cab['medico_responsable_id'] ?? 0),
+                'medico_nombre_snapshot' => (string)($cab['medico_nombre_snapshot'] ?? ''),
+                'medico_especialidad_snapshot' => (string)($cab['medico_especialidad_snapshot'] ?? ''),
+                'medico_cmp_snapshot' => (string)($cab['medico_cmp_snapshot'] ?? ''),
+                'medico_rne_snapshot' => (string)($cab['medico_rne_snapshot'] ?? ''),
+                'medico_rna_snapshot' => (string)($cab['medico_rna_snapshot'] ?? ''),
+                'medico_rna_vigente' => $medicoRnaVigente,
+                'medico_firma_snapshot' => (string)($cab['medico_firma_snapshot'] ?? ''),
+                'aptitud_registrada_by' => isset($cab['aptitud_registrada_by']) ? (int)$cab['aptitud_registrada_by'] : null,
+                'aptitud_registrada_at' => (string)($cab['aptitud_registrada_at'] ?? ''),
                 'empresa' => (string)($cab['empresa'] ?? ''),
                 'paciente_nombre_completo' => $pacienteNombreCompleto,
                 'paciente_historia_clinica' => $pacienteHistoriaClinica,
+                'paciente_sexo' => $pacienteSexo,
+                'paciente_fecha_nacimiento' => $pacienteFechaNacimiento,
+                'paciente_edad' => $pacienteEdad,
                 'documento_numero' => (string)($cab['documento_numero'] ?? ''),
                 'puesto_trabajo' => (string)($cab['puesto_trabajo'] ?? ''),
                 'protocolo_descripcion' => (string)($cab['protocolo_descripcion'] ?? ''),
@@ -1262,7 +1513,7 @@ if ($accion === 'registrar_orden') {
     $observacion = trim((string)($payload['observacion'] ?? ''));
     $subcontrataEmpresaId = (int)($payload['subcontrata_empresa_id'] ?? 0);
     $facturarEmpresaId = (int)($payload['facturar_empresa_id'] ?? 0);
-    $firmaDoctor = strtoupper(trim((string)($payload['firma_doctor'] ?? 'GALLEGOS')));
+    $medicoResponsableId = (int)($payload['medico_responsable_id'] ?? 0);
     $modo = strtoupper(trim((string)($payload['modo'] ?? 'CONVALIDACION')));
     $gestanteRaw = $payload['gestante'] ?? 0;
     $gestante = ($gestanteRaw === true || $gestanteRaw === 1 || $gestanteRaw === '1' || $gestanteRaw === 'true') ? 1 : 0;
@@ -1283,9 +1534,12 @@ if ($accion === 'registrar_orden') {
         out_orden(422, ['success' => false, 'error' => 'modo invalido']);
     }
 
-    if ($firmaDoctor === '') {
-        out_orden(422, ['success' => false, 'error' => 'firma_doctor es obligatoria']);
+    if (!$medicoSnapshotReady) {
+        out_orden(500, ['success' => false, 'error' => 'Falta aplicar migracion 20260725_0020 de medico responsable']);
     }
+    $medicoResponsable = require_medico_responsable_orden($mysqli, $medicoResponsableId);
+    $firmaDoctor = strtoupper($medicoResponsable['apellido'] !== '' ? $medicoResponsable['apellido'] : $medicoResponsable['nombre']);
+    $firmaDoctor = function_exists('mb_substr') ? mb_substr($firmaDoctor, 0, 80, 'UTF-8') : substr($firmaDoctor, 0, 80);
 
     foreach ([$subcontrataEmpresaId, $facturarEmpresaId] as $empresaRelacionadaId) {
         if ($empresaRelacionadaId <= 0) {
@@ -1348,6 +1602,29 @@ if ($accion === 'registrar_orden') {
             $insertTypes .= 's';
             $insertParams[] = $firmaDoctor;
         }
+        $insertColumns = array_merge($insertColumns, [
+            'medico_responsable',
+            'medico_responsable_id',
+            'medico_nombre_snapshot',
+            'medico_especialidad_snapshot',
+            'medico_cmp_snapshot',
+            'medico_rne_snapshot',
+            'medico_rna_snapshot',
+            'medico_firma_snapshot',
+        ]);
+        $insertValues = array_merge($insertValues, ['?', '?', '?', '?', '?', '?', '?', '?']);
+        $insertTypes .= 'sissssss';
+        array_push(
+            $insertParams,
+            $medicoResponsable['nombre'],
+            $medicoResponsable['id'],
+            $medicoResponsable['nombre'],
+            $medicoResponsable['especialidad'],
+            $medicoResponsable['cmp'],
+            $medicoResponsable['rne'],
+            $medicoResponsable['rna'],
+            $medicoResponsable['firma']
+        );
         if (!empty($ordenExtraColumns['modo'])) {
             $insertColumns[] = 'modo';
             $insertValues[] = '?';
@@ -1423,6 +1700,8 @@ if ($accion === 'registrar_orden') {
                 'subcontrata_empresa_id' => $subcontrataEmpresaId,
                 'facturar_empresa_id' => $facturarEmpresaId,
                 'firma_doctor' => $firmaDoctor,
+                'medico_responsable_id' => $medicoResponsable['id'],
+                'medico_responsable_id' => $medicoResponsable['id'],
                 'modo' => $modo,
                 'gestante' => $gestante,
                 'documento' => $documento,
@@ -1470,7 +1749,15 @@ if ($accion === 'anular_orden') {
         out_orden(422, ['success' => false, 'error' => 'motivo es obligatorio para anular']);
     }
 
-    $stmt = $mysqliOcup->prepare('SELECT id, estado FROM ocupacional_ordenes WHERE id = ? LIMIT 1');
+        $stmt = $mysqliOcup->prepare('SELECT o.id, o.estado,
+                                                                                EXISTS (
+                                                                                        SELECT 1
+                                                                                        FROM ocupacional_orden_eventos ev
+                                                                                        WHERE ev.orden_id = o.id
+                                                                                            AND ev.tipo_evento = "certificado_emitido"
+                                                                                ) AS certificado_emitido
+                                                                    FROM ocupacional_ordenes o
+                                                                    WHERE o.id = ? LIMIT 1');
     if (!$stmt) {
         out_orden(500, ['success' => false, 'error' => 'No se pudo validar orden']);
     }
@@ -1485,8 +1772,11 @@ if ($accion === 'anular_orden') {
     if ((string)$row['estado'] === 'anulada') {
         out_orden(422, ['success' => false, 'error' => 'La orden ya se encuentra anulada']);
     }
-    if ((string)$row['estado'] === 'completada') {
-        out_orden(422, ['success' => false, 'error' => 'No se puede anular una orden completada']);
+    if (in_array((string)$row['estado'], ['completada', 'cerrada'], true)) {
+        out_orden(422, ['success' => false, 'error' => 'No se puede anular una orden completada o cerrada']);
+    }
+    if ((int)($row['certificado_emitido'] ?? 0) === 1) {
+        out_orden(422, ['success' => false, 'error' => 'No se puede anular una orden con certificado emitido']);
     }
 
     $stmtUp = $mysqliOcup->prepare('UPDATE ocupacional_ordenes SET estado = "anulada", updated_at = CURRENT_TIMESTAMP, updated_by = ? WHERE id = ? LIMIT 1');
@@ -1547,24 +1837,7 @@ if ($accion === 'cerrar_orden') {
         out_orden(422, ['success' => false, 'error' => 'La orden ya se encuentra cerrada']);
     }
 
-    $stmtAgg = $mysqliOcup->prepare('SELECT
-                                        COUNT(*) AS total,
-                                        SUM(CASE WHEN estado_ejecucion IN ("realizado", "observado") THEN 1 ELSE 0 END) AS completados
-                                     FROM ocupacional_orden_detalle
-                                     WHERE orden_id = ?');
-    if (!$stmtAgg) {
-        out_orden(500, ['success' => false, 'error' => 'No se pudo validar avance de la orden']);
-    }
-    $stmtAgg->bind_param('i', $ordenId);
-    $stmtAgg->execute();
-    $agg = $stmtAgg->get_result()->fetch_assoc();
-    $stmtAgg->close();
-
-    $total = (int)($agg['total'] ?? 0);
-    $completados = (int)($agg['completados'] ?? 0);
-    if ($total <= 0 || $completados < $total) {
-        out_orden(422, ['success' => false, 'error' => 'No se puede cerrar la orden. Faltan examenes por resolver']);
-    }
+    $resumenClinico = require_orden_clinicamente_finalizada($mysqliOcup, $ordenId);
 
     $stmtUp = $mysqliOcup->prepare('UPDATE ocupacional_ordenes
                                     SET estado = "cerrada", updated_by = ?, updated_at = CURRENT_TIMESTAMP
@@ -1588,8 +1861,8 @@ if ($accion === 'cerrar_orden') {
         'Orden cerrada formalmente',
         $usuarioId,
         [
-            'total_items' => $total,
-            'total_completados' => $completados,
+            'total_items' => $resumenClinico['total'],
+            'total_finalizados' => $resumenClinico['finalizados'],
         ]
     );
 
@@ -1608,11 +1881,18 @@ if ($accion === 'guardar_aptitud_orden') {
     $aptitudFinal = trim((string)($payload['aptitud_final'] ?? ''));
     $restriccionFinal = trim((string)($payload['restriccion_final'] ?? ''));
     $recomendacionFinal = trim((string)($payload['recomendacion_final'] ?? ''));
-    $medicoResponsable = trim((string)($payload['medico_responsable'] ?? ''));
+    $medicoResponsableId = (int)($payload['medico_responsable_id'] ?? 0);
     $aptitudesValidas = ['APTO', 'APTO_CON_RESTRICCIONES', 'NO_APTO'];
 
     if ($ordenId <= 0 || !in_array($aptitudFinal, $aptitudesValidas, true)) {
         out_orden(422, ['success' => false, 'error' => 'id y aptitud_final valida son obligatorios']);
+    }
+    if (!$medicoSnapshotReady) {
+        out_orden(500, ['success' => false, 'error' => 'Falta aplicar migracion 20260725_0020 de medico responsable']);
+    }
+    $medicoResponsable = require_medico_responsable_orden($mysqli, $medicoResponsableId);
+    if ($aptitudFinal === 'APTO_CON_RESTRICCIONES' && $restriccionFinal === '') {
+        out_orden(422, ['success' => false, 'error' => 'Debe registrar restricciones para la aptitud seleccionada']);
     }
 
     $stmt = $mysqliOcup->prepare('SELECT id, estado FROM ocupacional_ordenes WHERE id = ? LIMIT 1');
@@ -1627,22 +1907,50 @@ if ($accion === 'guardar_aptitud_orden') {
     if (!$orden) {
         out_orden(404, ['success' => false, 'error' => 'Orden no encontrada']);
     }
-    if ((string)$orden['estado'] !== 'cerrada') {
-        out_orden(422, ['success' => false, 'error' => 'La aptitud final solo puede guardarse en orden cerrada']);
+    if (!in_array((string)$orden['estado'], ['completada', 'cerrada'], true)) {
+        out_orden(422, ['success' => false, 'error' => 'La aptitud final solo puede guardarse en una orden completada o cerrada']);
     }
+    $resumenClinico = require_orden_clinicamente_finalizada($mysqliOcup, $ordenId);
+    $cerradaAlGuardarAptitud = (string)$orden['estado'] === 'completada';
 
     $stmtUp = $mysqliOcup->prepare('UPDATE ocupacional_ordenes
                                     SET aptitud_final = ?,
                                         restriccion_final = ?,
                                         recomendacion_final = ?,
                                         medico_responsable = ?,
+                                        medico_responsable_id = ?,
+                                        medico_nombre_snapshot = ?,
+                                        medico_especialidad_snapshot = ?,
+                                        medico_cmp_snapshot = ?,
+                                        medico_rne_snapshot = ?,
+                                        medico_rna_snapshot = ?,
+                                        medico_firma_snapshot = ?,
+                                        aptitud_registrada_by = ?,
+                                        aptitud_registrada_at = CURRENT_TIMESTAMP,
+                                        estado = CASE WHEN estado = "completada" THEN "cerrada" ELSE estado END,
                                         updated_by = ?,
                                         updated_at = CURRENT_TIMESTAMP
                                     WHERE id = ? LIMIT 1');
     if (!$stmtUp) {
         out_orden(500, ['success' => false, 'error' => 'No se pudo guardar aptitud final']);
     }
-    $stmtUp->bind_param('ssssii', $aptitudFinal, $restriccionFinal, $recomendacionFinal, $medicoResponsable, $usuarioId, $ordenId);
+    $stmtUp->bind_param(
+        'ssssissssssiii',
+        $aptitudFinal,
+        $restriccionFinal,
+        $recomendacionFinal,
+        $medicoResponsable['nombre'],
+        $medicoResponsable['id'],
+        $medicoResponsable['nombre'],
+        $medicoResponsable['especialidad'],
+        $medicoResponsable['cmp'],
+        $medicoResponsable['rne'],
+        $medicoResponsable['rna'],
+        $medicoResponsable['firma'],
+        $usuarioId,
+        $usuarioId,
+        $ordenId
+    );
     $stmtUp->execute();
     $stmtUp->close();
 
@@ -1656,15 +1964,36 @@ if ($accion === 'guardar_aptitud_orden') {
             'aptitud_final' => $aptitudFinal,
             'restriccion_final' => $restriccionFinal,
             'recomendacion_final' => $recomendacionFinal,
-            'medico_responsable' => $medicoResponsable,
+            'medico_responsable_id' => $medicoResponsable['id'],
+            'medico_responsable' => $medicoResponsable['nombre'],
+            'medico_cmp' => $medicoResponsable['cmp'],
+            'medico_rne' => $medicoResponsable['rne'],
+            'medico_rna' => $medicoResponsable['rna'],
         ]
     );
+
+    if ($cerradaAlGuardarAptitud) {
+        registrar_evento_orden(
+            $mysqliOcup,
+            $ordenId,
+            'orden_cerrada',
+            'Orden cerrada al registrar aptitud final',
+            $usuarioId,
+            [
+                'total_examenes' => $resumenClinico['total'],
+                'resultados_finalizados' => $resumenClinico['finalizados'],
+                'aptitud_final' => $aptitudFinal,
+            ]
+        );
+    }
 
     out_orden(200, [
         'success' => true,
         'data' => [
             'id' => $ordenId,
             'aptitud_final' => $aptitudFinal,
+            'estado' => 'cerrada',
+            'cerrada_al_guardar_aptitud' => $cerradaAlGuardarAptitud,
         ],
     ]);
 }
@@ -1677,8 +2006,13 @@ if ($accion === 'registrar_emision_certificado_orden') {
     if ($ordenId <= 0) {
         out_orden(422, ['success' => false, 'error' => 'id de orden es obligatorio']);
     }
+    if (!$medicoSnapshotReady) {
+        out_orden(500, ['success' => false, 'error' => 'Falta aplicar migracion 20260725_0020 de medico responsable']);
+    }
 
-    $stmt = $mysqliOcup->prepare('SELECT id, codigo, estado, aptitud_final
+    $stmt = $mysqliOcup->prepare('SELECT id, codigo, estado, aptitud_final, restriccion_final,
+                                         medico_responsable_id, medico_nombre_snapshot,
+                                         medico_cmp_snapshot, medico_firma_snapshot
                                   FROM ocupacional_ordenes
                                   WHERE id = ? LIMIT 1');
     if (!$stmt) {
@@ -1698,6 +2032,17 @@ if ($accion === 'registrar_emision_certificado_orden') {
     if (trim((string)($orden['aptitud_final'] ?? '')) === '') {
         out_orden(422, ['success' => false, 'error' => 'Debe registrar aptitud final antes de emitir certificado']);
     }
+    if ((int)($orden['medico_responsable_id'] ?? 0) <= 0
+        || trim((string)($orden['medico_nombre_snapshot'] ?? '')) === ''
+        || trim((string)($orden['medico_cmp_snapshot'] ?? '')) === ''
+        || trim((string)($orden['medico_firma_snapshot'] ?? '')) === '') {
+        out_orden(422, ['success' => false, 'error' => 'Debe registrar un medico responsable con CMP y firma antes de emitir certificado']);
+    }
+    if ((string)$orden['aptitud_final'] === 'APTO_CON_RESTRICCIONES'
+        && trim((string)($orden['restriccion_final'] ?? '')) === '') {
+        out_orden(422, ['success' => false, 'error' => 'Debe registrar las restricciones antes de emitir certificado']);
+    }
+    require_orden_clinicamente_finalizada($mysqliOcup, $ordenId);
 
     registrar_evento_orden(
         $mysqliOcup,
@@ -1726,13 +2071,16 @@ if ($accion === 'actualizar_detalle_orden') {
     $detalleId = (int)($payload['detalle_id'] ?? 0);
     $estadoEjecucion = trim((string)($payload['estado_ejecucion'] ?? ''));
     $observacionEjecucion = trim((string)($payload['observacion_ejecucion'] ?? ''));
-    $estadosValidos = ['pendiente', 'en_proceso', 'realizado', 'observado'];
+    $estadosValidos = ['pendiente', 'en_proceso', 'observado'];
 
     if ($detalleId <= 0 || !in_array($estadoEjecucion, $estadosValidos, true)) {
         out_orden(422, ['success' => false, 'error' => 'detalle_id y estado_ejecucion valido son obligatorios']);
     }
+    if ($estadoEjecucion === 'observado' && $observacionEjecucion === '') {
+        out_orden(422, ['success' => false, 'error' => 'La observacion es obligatoria para marcar un examen como observado']);
+    }
 
-    $stmt = $mysqliOcup->prepare('SELECT d.id, d.orden_id, o.estado AS estado_orden
+    $stmt = $mysqliOcup->prepare('SELECT d.id, d.orden_id, d.estado_ejecucion, o.estado AS estado_orden
                                   FROM ocupacional_orden_detalle d
                                   INNER JOIN ocupacional_ordenes o ON o.id = d.orden_id
                                   WHERE d.id = ? LIMIT 1');
@@ -1753,40 +2101,58 @@ if ($accion === 'actualizar_detalle_orden') {
     if ((string)$row['estado_orden'] === 'cerrada') {
         out_orden(422, ['success' => false, 'error' => 'No se puede ejecutar detalle de una orden cerrada']);
     }
-
-    $fechaEjecucion = null;
-    if (in_array($estadoEjecucion, ['realizado', 'observado'], true)) {
-        $fechaEjecucion = date('Y-m-d H:i:s');
+    if ((string)$row['estado_ejecucion'] === 'observado' && $estadoEjecucion !== 'observado') {
+        out_orden(422, ['success' => false, 'error' => 'Use el levantamiento o anulacion de interconsulta para liberar un examen observado']);
     }
 
-    $stmtUp = $mysqliOcup->prepare('UPDATE ocupacional_orden_detalle
-                                    SET estado_ejecucion = ?,
-                                        observacion_ejecucion = ?,
-                                        fecha_ejecucion = ?,
-                                        updated_by = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE id = ? LIMIT 1');
-    if (!$stmtUp) {
+    $fechaEjecucion = $estadoEjecucion === 'observado' ? date('Y-m-d H:i:s') : null;
+    $ordenId = (int)$row['orden_id'];
+    $mysqliOcup->begin_transaction();
+    try {
+        $stmtUp = $mysqliOcup->prepare('UPDATE ocupacional_orden_detalle
+                                        SET estado_ejecucion = ?,
+                                            observacion_ejecucion = ?,
+                                            fecha_ejecucion = ?,
+                                            updated_by = ?,
+                                            updated_at = CURRENT_TIMESTAMP
+                                        WHERE id = ? LIMIT 1');
+        if (!$stmtUp) {
+            throw new Exception('No se pudo preparar detalle de orden');
+        }
+        $stmtUp->bind_param('sssii', $estadoEjecucion, $observacionEjecucion, $fechaEjecucion, $usuarioId, $detalleId);
+        $stmtUp->execute();
+        $stmtUp->close();
+
+        if ($estadoEjecucion === 'observado') {
+            $stmtResultados = $mysqliOcup->prepare('UPDATE ocupacional_resultados_clinicos
+                                                    SET estado = "borrador", updated_by = ?, updated_at = CURRENT_TIMESTAMP
+                                                    WHERE orden_detalle_id = ? AND estado = "finalizado"');
+            if (!$stmtResultados) {
+                throw new Exception('No se pudo invalidar resultado observado');
+            }
+            $stmtResultados->bind_param('ii', $usuarioId, $detalleId);
+            $stmtResultados->execute();
+            $stmtResultados->close();
+        }
+
+        registrar_evento_orden(
+            $mysqliOcup,
+            $ordenId,
+            'detalle_actualizado',
+            $estadoEjecucion === 'observado' ? 'Examen observado; resultado clinico devuelto a borrador' : 'Actualizacion de estado de examen',
+            $usuarioId,
+            [
+                'detalle_id' => $detalleId,
+                'estado_ejecucion' => $estadoEjecucion,
+                'observacion' => $observacionEjecucion,
+            ]
+        );
+        sync_estado_orden_por_detalle($mysqliOcup, $ordenId, $usuarioId);
+        $mysqliOcup->commit();
+    } catch (Throwable $e) {
+        $mysqliOcup->rollback();
         out_orden(500, ['success' => false, 'error' => 'No se pudo actualizar detalle de orden']);
     }
-    $stmtUp->bind_param('sssii', $estadoEjecucion, $observacionEjecucion, $fechaEjecucion, $usuarioId, $detalleId);
-    $stmtUp->execute();
-    $stmtUp->close();
-
-    $ordenId = (int)$row['orden_id'];
-    registrar_evento_orden(
-        $mysqliOcup,
-        $ordenId,
-        'detalle_actualizado',
-        'Actualizacion de estado de examen',
-        $usuarioId,
-        [
-            'detalle_id' => $detalleId,
-            'estado_ejecucion' => $estadoEjecucion,
-            'observacion' => $observacionEjecucion,
-        ]
-    );
-    sync_estado_orden_por_detalle($mysqliOcup, $ordenId, $usuarioId);
 
     out_orden(200, [
         'success' => true,

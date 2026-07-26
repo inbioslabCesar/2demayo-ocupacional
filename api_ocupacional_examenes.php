@@ -806,6 +806,34 @@ if ($accion === 'inactivar') {
         out_exam(422, ['success' => false, 'error' => 'id es obligatorio para inactivar']);
     }
 
+    if (table_exists_exam($mysqliOcup, 'ocupacional_catalogo_empresas')) {
+        $stmtUso = $mysqliOcup->prepare('SELECT COUNT(*) AS total,
+                                                COUNT(DISTINCT empresa_id) AS empresas
+                                         FROM ocupacional_catalogo_empresas
+                                         WHERE examen_id = ? AND estado = "activo"');
+        if (!$stmtUso) {
+            out_exam(500, ['success' => false, 'error' => 'No se pudo validar uso del examen en empresas']);
+        }
+        $stmtUso->bind_param('i', $id);
+        $stmtUso->execute();
+        $uso = $stmtUso->get_result()->fetch_assoc();
+        $stmtUso->close();
+        $asignacionesActivas = (int)($uso['total'] ?? 0);
+        if ($asignacionesActivas > 0) {
+            $empresasRelacionadas = (int)($uso['empresas'] ?? 0);
+            out_exam(409, [
+                'success' => false,
+                'error' => 'No se puede inactivar: el examen sigue activo en ' . $empresasRelacionadas . ' empresa(s). Desactivelo primero en Catalogo por Empresa',
+                'error_code' => 'EXAMEN_ASIGNADO_EMPRESAS',
+                'data' => [
+                    'id' => $id,
+                    'asignaciones_activas' => $asignacionesActivas,
+                    'empresas_relacionadas' => $empresasRelacionadas,
+                ],
+            ]);
+        }
+    }
+
     $stmtInactivar = $mysqliOcup->prepare('UPDATE ocupacional_examenes_generales SET estado = "inactivo", updated_by = ?, updated_at = NOW() WHERE id = ? AND estado <> "inactivo" LIMIT 1');
     if (!$stmtInactivar) {
         out_exam(500, ['success' => false, 'error' => 'No se pudo preparar la inactivacion']);

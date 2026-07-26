@@ -4,6 +4,28 @@
 Evitar ambiguedades entre scripts antiguos (base fija) y scripts actuales (base activa).
 
 ## Ruta oficial (vigente)
+### Produccion Hostinger con dos bases
+
+Para las bases actuales de Hostinger no ejecutar la secuencia historica archivo por archivo. Usar los paquetes acumulativos:
+
+1. En la base clinica: `20260725_0024_hostinger_produccion_clinica.sql`.
+2. En la base ocupacional: `20260725_0023_hostinger_produccion_ocupacional.sql`.
+
+Instrucciones, backups, postflight y smoke test:
+
+- `docs/salud-ocupacional/GUIA_DESPLIEGUE_SQL_HOSTINGER_DOS_BD_20260725.md`
+
+Los paquetes seleccionan las bases exactas de produccion y no deben mezclarse con los maestros Hostinger 0013, 0014 o 0015.
+
+Si 0024 y 0023 ya fueron ejecutados, para habilitar el RNA opcional del medico aplicar solamente:
+
+1. En la base clinica: `20260725_0025_medicos_rna_clinica.sql`.
+2. En la base ocupacional: `20260725_0026_ocupacional_medico_rna_snapshot.sql`.
+
+Los dos scripts son incrementales, admiten segunda ejecucion y no modifican los registros existentes.
+
+### Desarrollo o instalacion historica incremental
+
 1. Seleccionar previamente la base de datos destino en la herramienta/cliente SQL.
 2. Ejecutar las migraciones del bloque `20260614_000x` en orden:
    - `20260614_0001_salud_ocupacional_base.sql`
@@ -16,6 +38,8 @@ Evitar ambiguedades entre scripts antiguos (base fija) y scripts actuales (base 
 7. `20260724_0007_pacientes_campos_legacy.sql`
 8. `20260724_0008_ubigeo_lima.sql`
 9. `20260724_0009_ubigeo_peru_completo.sql`
+
+Esta secuencia historica no representa por si sola el esquema ocupacional completo actual. Para nuevos despliegues utilizar los paquetes acumulativos indicados arriba.
 
 ## Nota de biometria
 

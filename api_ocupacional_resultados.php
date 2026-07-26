@@ -93,10 +93,13 @@ function normalize_formato_codigo_ocup($value, $fallback)
     return $raw;
 }
 
-function build_template_codigo_ocup($codigo, $descripcion)
+function build_template_codigo_ocup($codigo, $descripcion, $grupo = '', $subgrupo = '')
 {
-    $text = strtolower(trim((string)$codigo . ' ' . (string)$descripcion));
+    $text = strtolower(trim((string)$codigo . ' ' . (string)$descripcion . ' ' . (string)$grupo . ' ' . (string)$subgrupo));
 
+    if (strpos($text, 'triaje') !== false || strpos($text, 'triage') !== false || strpos($text, 'signos vitales') !== false) {
+        return 'triaje_clinico';
+    }
     if (strpos($text, 'hemograma') !== false || strpos($text, 'lab') !== false || strpos($text, 'laboratorio') !== false) {
         return 'lab_basico';
     }
@@ -112,28 +115,68 @@ function build_template_codigo_ocup($codigo, $descripcion)
     if (strpos($text, 'electro') !== false || strpos($text, 'ekg') !== false || strpos($text, 'ecg') !== false) {
         return 'ekg_basico';
     }
+    if (strpos($text, 'evaluacion medica') !== false
+        || strpos($text, 'examen medico') !== false
+        || strpos($text, 'medicina ocupacional') !== false
+        || strpos($text, 'ev_0001') !== false) {
+        return 'evaluacion_medica_ocupacional';
+    }
 
     return 'general_basico';
 }
 
-function build_template_data_ocup($templateCode)
+function build_template_data_ocup($templateCode, $examenCodigo = '', $examenDescripcion = '')
 {
     switch ($templateCode) {
-        case 'lab_basico':
+        case 'triaje_clinico':
             return [
-                'parametros' => [
+                'presion_sistolica' => '',
+                'presion_diastolica' => '',
+                'frecuencia_cardiaca' => '',
+                'frecuencia_respiratoria' => '',
+                'temperatura' => '',
+                'saturacion_oxigeno' => '',
+                'peso_kg' => '',
+                'talla_cm' => '',
+                'imc' => '',
+                'observaciones' => '',
+            ];
+        case 'evaluacion_medica_ocupacional':
+            return [
+                'motivo_evaluacion' => '',
+                'antecedentes_ocupacionales' => '',
+                'antecedentes_personales' => '',
+                'anamnesis' => '',
+                'examen_fisico' => '',
+                'diagnostico' => '',
+                'conclusion' => '',
+                'recomendaciones' => '',
+            ];
+        case 'lab_basico':
+            $labText = strtolower(trim((string)$examenCodigo . ' ' . (string)$examenDescripcion));
+            $parametros = strpos($labText, 'hemograma') !== false
+                ? [
                     ['nombre' => 'hemoglobina', 'valor' => '', 'referencia' => ''],
                     ['nombre' => 'hematocrito', 'valor' => '', 'referencia' => ''],
                     ['nombre' => 'leucocitos', 'valor' => '', 'referencia' => ''],
-                ],
+                ]
+                : [[
+                    'nombre' => trim((string)$examenDescripcion) !== '' ? trim((string)$examenDescripcion) : trim((string)$examenCodigo),
+                    'valor' => '',
+                    'referencia' => '',
+                ]];
+            return [
+                'parametros' => $parametros,
                 'hallazgos' => '',
                 'conclusion' => '',
                 'recomendaciones' => '',
             ];
         case 'audiometria_basica':
             return [
-                'od' => ['500' => '', '1000' => '', '2000' => '', '4000' => ''],
-                'oi' => ['500' => '', '1000' => '', '2000' => '', '4000' => ''],
+                'od' => ['500' => '', '1000' => '', '2000' => '', '3000' => '', '4000' => '', '6000' => '', '8000' => ''],
+                'oi' => ['500' => '', '1000' => '', '2000' => '', '3000' => '', '4000' => '', '6000' => '', '8000' => ''],
+                'otoscopia_od' => '',
+                'otoscopia_oi' => '',
                 'impresion' => '',
                 'recomendaciones' => '',
             ];
@@ -169,6 +212,72 @@ function build_template_data_ocup($templateCode)
                 'recomendaciones' => '',
             ];
     }
+}
+
+function require_text_result_ocup($data, $key, $label)
+{
+    if (trim((string)($data[$key] ?? '')) === '') {
+        out_result_ocup(422, ['success' => false, 'error' => $label . ' es obligatorio para finalizar']);
+    }
+}
+
+function require_number_range_result_ocup($data, $key, $label, $min, $max)
+{
+    $value = $data[$key] ?? null;
+    if ($value === null || trim((string)$value) === '' || !is_numeric($value)) {
+        out_result_ocup(422, ['success' => false, 'error' => $label . ' debe ser numerico para finalizar']);
+    }
+    $number = (float)$value;
+    if ($number < $min || $number > $max) {
+        out_result_ocup(422, ['success' => false, 'error' => $label . ' esta fuera del rango permitido']);
+    }
+}
+
+function validate_finalized_data_result_ocup($templateCode, $data)
+{
+    if (!is_array($data)) {
+        out_result_ocup(422, ['success' => false, 'error' => 'Los datos clinicos son invalidos']);
+    }
+
+    if ($templateCode === 'triaje_clinico') {
+        require_number_range_result_ocup($data, 'presion_sistolica', 'Presion sistolica', 50, 260);
+        require_number_range_result_ocup($data, 'presion_diastolica', 'Presion diastolica', 30, 180);
+        require_number_range_result_ocup($data, 'frecuencia_cardiaca', 'Frecuencia cardiaca', 20, 250);
+        require_number_range_result_ocup($data, 'frecuencia_respiratoria', 'Frecuencia respiratoria', 5, 80);
+        require_number_range_result_ocup($data, 'temperatura', 'Temperatura', 30, 45);
+        require_number_range_result_ocup($data, 'saturacion_oxigeno', 'Saturacion de oxigeno', 50, 100);
+        require_number_range_result_ocup($data, 'peso_kg', 'Peso', 2, 400);
+        require_number_range_result_ocup($data, 'talla_cm', 'Talla', 40, 250);
+        return;
+    }
+
+    if ($templateCode === 'audiometria_basica') {
+        foreach (['od' => 'OD', 'oi' => 'OI'] as $earKey => $earLabel) {
+            $ear = isset($data[$earKey]) && is_array($data[$earKey]) ? $data[$earKey] : [];
+            foreach (['500', '1000', '2000', '4000'] as $frequency) {
+                require_number_range_result_ocup($ear, $frequency, $earLabel . ' ' . $frequency . ' Hz', -10, 130);
+            }
+        }
+        require_text_result_ocup($data, 'impresion', 'Impresion audiometrica');
+        return;
+    }
+
+    if ($templateCode === 'evaluacion_medica_ocupacional') {
+        require_text_result_ocup($data, 'anamnesis', 'Anamnesis');
+        require_text_result_ocup($data, 'examen_fisico', 'Examen fisico');
+        require_text_result_ocup($data, 'conclusion', 'Conclusion');
+        return;
+    }
+
+    if ($templateCode === 'oftalmologia_basica') {
+        require_text_result_ocup($data, 'agudeza_visual_od', 'Agudeza visual OD');
+        require_text_result_ocup($data, 'agudeza_visual_oi', 'Agudeza visual OI');
+        require_text_result_ocup($data, 'impresion', 'Impresion oftalmologica');
+        return;
+    }
+
+    require_text_result_ocup($data, 'hallazgos', 'Hallazgos');
+    require_text_result_ocup($data, 'conclusion', 'Conclusion');
 }
 
 function normalize_template_codigo_ocup($value, $fallback = 'plantilla')
@@ -378,11 +487,17 @@ function sync_estado_orden_por_detalle_result_ocup($mysqliOcup, $ordenId, $usuar
 {
     $stmt = $mysqliOcup->prepare('SELECT
                                     COUNT(*) AS total,
-                                    SUM(CASE WHEN estado_ejecucion = "pendiente" THEN 1 ELSE 0 END) AS pendientes,
-                                    SUM(CASE WHEN estado_ejecucion = "en_proceso" THEN 1 ELSE 0 END) AS en_proceso,
-                                    SUM(CASE WHEN estado_ejecucion IN ("realizado", "observado") THEN 1 ELSE 0 END) AS completados
-                                  FROM ocupacional_orden_detalle
-                                  WHERE orden_id = ?');
+                                                                        SUM(CASE WHEN d.estado_ejecucion = "pendiente" THEN 1 ELSE 0 END) AS pendientes,
+                                                                        SUM(CASE WHEN d.estado_ejecucion = "realizado"
+                                                                                            AND EXISTS (
+                                                                                                    SELECT 1
+                                                                                                    FROM ocupacional_resultados_clinicos rc
+                                                                                                    WHERE rc.orden_detalle_id = d.id
+                                                                                                        AND rc.estado = "finalizado"
+                                                                                            )
+                                                                                         THEN 1 ELSE 0 END) AS completados
+                                                                    FROM ocupacional_orden_detalle d
+                                                                    WHERE d.orden_id = ?');
     if (!$stmt) {
         return;
     }
@@ -393,13 +508,12 @@ function sync_estado_orden_por_detalle_result_ocup($mysqliOcup, $ordenId, $usuar
 
     $total = (int)($agg['total'] ?? 0);
     $pendientes = (int)($agg['pendientes'] ?? 0);
-    $enProceso = (int)($agg['en_proceso'] ?? 0);
     $completados = (int)($agg['completados'] ?? 0);
 
     $nuevoEstado = 'emitida';
     if ($total > 0 && $completados >= $total) {
         $nuevoEstado = 'completada';
-    } elseif (($total - $pendientes) > 0 || $enProceso > 0) {
+    } elseif (($total - $pendientes) > 0) {
         $nuevoEstado = 'en_proceso';
     }
 
@@ -440,7 +554,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $templateCode = build_template_codigo_ocup($examenCodigoRaw, $examenDescripcion);
         $formatoCodigo = normalize_formato_codigo_ocup($_GET['formato_codigo'] ?? '', $examenCodigoRaw !== '' ? $examenCodigoRaw : 'formato_general');
         $catalog = fetch_template_catalog_result_ocup($mysqliOcup, $templateCode, $examenCodigoRaw, $formatoCodigo);
-        $templateData = build_template_data_ocup($templateCode);
+        $templateData = build_template_data_ocup($templateCode, $examenCodigoRaw, $examenDescripcion);
         $plantillas = merge_templates_with_default_result_ocup($catalog, $templateCode, $templateData, $examenCodigoRaw, $formatoCodigo);
 
         out_result_ocup(200, [
@@ -463,9 +577,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         out_result_ocup(422, ['success' => false, 'error' => 'orden_detalle_id es obligatorio']);
     }
 
-    $stmtDet = $mysqliOcup->prepare('SELECT d.id, d.orden_id, d.examen_id, d.examen_codigo, d.examen_descripcion, o.estado AS estado_orden
+    $stmtDet = $mysqliOcup->prepare('SELECT d.id, d.orden_id, d.examen_id, d.examen_codigo, d.examen_descripcion,
+                                            eg.grupo AS examen_grupo, eg.subgrupo AS examen_subgrupo,
+                                            o.estado AS estado_orden
                                      FROM ocupacional_orden_detalle d
                                      INNER JOIN ocupacional_ordenes o ON o.id = d.orden_id
+                                     LEFT JOIN ocupacional_examenes_generales eg ON eg.id = d.examen_id
                                      WHERE d.id = ? LIMIT 1');
     if (!$stmtDet) {
         out_result_ocup(500, ['success' => false, 'error' => 'No se pudo consultar detalle de orden']);
@@ -480,8 +597,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     $formatoCodigo = normalize_formato_codigo_ocup($_GET['formato_codigo'] ?? '', $detalle['examen_codigo'] ?? 'formato_general');
-    $templateCode = build_template_codigo_ocup($detalle['examen_codigo'] ?? '', $detalle['examen_descripcion'] ?? '');
-    $templateData = build_template_data_ocup($templateCode);
+    $templateCode = build_template_codigo_ocup(
+        $detalle['examen_codigo'] ?? '',
+        $detalle['examen_descripcion'] ?? '',
+        $detalle['examen_grupo'] ?? '',
+        $detalle['examen_subgrupo'] ?? ''
+    );
+    $templateData = build_template_data_ocup(
+        $templateCode,
+        $detalle['examen_codigo'] ?? '',
+        $detalle['examen_descripcion'] ?? ''
+    );
     $catalog = fetch_template_catalog_result_ocup(
         $mysqliOcup,
         $templateCode,
@@ -740,6 +866,50 @@ if ($accion === 'eliminar_plantilla') {
     out_result_ocup(200, ['success' => true, 'message' => 'Plantilla eliminada']);
 }
 
+if ($accion === 'registrar_emision_pdf') {
+    $ordenDetalleId = (int)($payload['orden_detalle_id'] ?? 0);
+    if ($ordenDetalleId <= 0) {
+        out_result_ocup(422, ['success' => false, 'error' => 'orden_detalle_id es obligatorio']);
+    }
+    $formatoCodigo = normalize_formato_codigo_ocup($payload['formato_codigo'] ?? '', 'formato_general');
+    $stmtPdf = $mysqliOcup->prepare('SELECT rc.id, rc.orden_id, rc.estado, d.examen_codigo, d.examen_descripcion
+                                     FROM ocupacional_resultados_clinicos rc
+                                     INNER JOIN ocupacional_orden_detalle d ON d.id = rc.orden_detalle_id
+                                     WHERE rc.orden_detalle_id = ? AND rc.formato_codigo = ?
+                                     LIMIT 1');
+    if (!$stmtPdf) {
+        out_result_ocup(500, ['success' => false, 'error' => 'No se pudo validar resultado para PDF']);
+    }
+    $stmtPdf->bind_param('is', $ordenDetalleId, $formatoCodigo);
+    $stmtPdf->execute();
+    $resultadoPdf = $stmtPdf->get_result()->fetch_assoc();
+    $stmtPdf->close();
+    if (!$resultadoPdf) {
+        out_result_ocup(404, ['success' => false, 'error' => 'Resultado clinico no encontrado']);
+    }
+    if ((string)($resultadoPdf['estado'] ?? '') !== 'finalizado') {
+        out_result_ocup(422, ['success' => false, 'error' => 'Solo se puede emitir PDF de un resultado finalizado']);
+    }
+
+    $usuarioId = isset($_SESSION['usuario']['id']) ? (int)$_SESSION['usuario']['id'] : null;
+    registrar_evento_result_ocup(
+        $mysqliOcup,
+        (int)$resultadoPdf['orden_id'],
+        'resultado_pdf_emitido',
+        'PDF de resultado clinico emitido: ' . (string)($resultadoPdf['examen_codigo'] ?? $formatoCodigo),
+        $usuarioId,
+        [
+            'resultado_id' => (int)$resultadoPdf['id'],
+            'orden_detalle_id' => $ordenDetalleId,
+            'formato_codigo' => $formatoCodigo,
+            'examen_codigo' => (string)($resultadoPdf['examen_codigo'] ?? ''),
+            'examen_descripcion' => (string)($resultadoPdf['examen_descripcion'] ?? ''),
+            'formato_documento' => 'pdf',
+        ]
+    );
+    out_result_ocup(200, ['success' => true, 'message' => 'Emision de PDF clinico registrada']);
+}
+
 if ($accion !== 'guardar') {
     out_result_ocup(422, ['success' => false, 'error' => 'accion POST no soportada']);
 }
@@ -749,9 +919,12 @@ if ($ordenDetalleId <= 0) {
     out_result_ocup(422, ['success' => false, 'error' => 'orden_detalle_id es obligatorio']);
 }
 
-$stmtDet = $mysqliOcup->prepare('SELECT d.id, d.orden_id, d.examen_id, d.examen_codigo, d.estado_ejecucion, o.estado AS estado_orden
+$stmtDet = $mysqliOcup->prepare('SELECT d.id, d.orden_id, d.examen_id, d.examen_codigo, d.examen_descripcion, d.estado_ejecucion,
+                                        eg.grupo AS examen_grupo, eg.subgrupo AS examen_subgrupo,
+                                        o.estado AS estado_orden
                                  FROM ocupacional_orden_detalle d
                                  INNER JOIN ocupacional_ordenes o ON o.id = d.orden_id
+                                 LEFT JOIN ocupacional_examenes_generales eg ON eg.id = d.examen_id
                                  WHERE d.id = ? LIMIT 1');
 if (!$stmtDet) {
     out_result_ocup(500, ['success' => false, 'error' => 'No se pudo validar detalle de orden']);
@@ -776,6 +949,15 @@ $formatoCodigo = normalize_formato_codigo_ocup($payload['formato_codigo'] ?? '',
 $estado = strtolower(trim((string)($payload['estado'] ?? 'borrador')));
 if (!in_array($estado, ['borrador', 'finalizado', 'anulado'], true)) {
     out_result_ocup(422, ['success' => false, 'error' => 'estado invalido']);
+}
+if ($estado === 'finalizado') {
+    $templateCode = build_template_codigo_ocup(
+        $detalle['examen_codigo'] ?? '',
+        $detalle['examen_descripcion'] ?? '',
+        $detalle['examen_grupo'] ?? '',
+        $detalle['examen_subgrupo'] ?? ''
+    );
+    validate_finalized_data_result_ocup($templateCode, $datosDecoded);
 }
 
 $observacion = trim((string)($payload['observacion'] ?? ''));
@@ -816,20 +998,32 @@ if ($exist) {
     $stmtIns->close();
 }
 
-// Sincronizar estado de detalle segun estado del formato clinico.
+// Sincronizar estado de detalle segun todos sus formatos clinicos.
+$stmtFinal = $mysqliOcup->prepare('SELECT EXISTS (
+                                      SELECT 1
+                                      FROM ocupacional_resultados_clinicos
+                                      WHERE orden_detalle_id = ?
+                                        AND estado = "finalizado"
+                                   ) AS tiene_finalizado');
+$tieneFinalizado = false;
+if ($stmtFinal) {
+    $stmtFinal->bind_param('i', $ordenDetalleId);
+    $stmtFinal->execute();
+    $tieneFinalizado = (int)($stmtFinal->get_result()->fetch_assoc()['tiene_finalizado'] ?? 0) === 1;
+    $stmtFinal->close();
+}
+
 $nuevoEstadoDetalle = null;
-if ($estado === 'finalizado') {
+if ($tieneFinalizado) {
     $nuevoEstadoDetalle = 'realizado';
-} elseif ($estado === 'borrador') {
-    $estadoDetActual = (string)($detalle['estado_ejecucion'] ?? 'pendiente');
-    if ($estadoDetActual === 'pendiente') {
-        $nuevoEstadoDetalle = 'en_proceso';
-    }
+} elseif ((string)($detalle['estado_ejecucion'] ?? '') === 'realizado'
+    || ($estado === 'borrador' && (string)($detalle['estado_ejecucion'] ?? '') === 'pendiente')) {
+    $nuevoEstadoDetalle = 'en_proceso';
 }
 
 if ($nuevoEstadoDetalle !== null) {
     $stmtUpdDet = $mysqliOcup->prepare('UPDATE ocupacional_orden_detalle
-                                        SET estado_ejecucion = ?, observacion_ejecucion = ?, fecha_ejecucion = CASE WHEN ? = "realizado" THEN CURRENT_TIMESTAMP ELSE fecha_ejecucion END, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+                                        SET estado_ejecucion = ?, observacion_ejecucion = ?, fecha_ejecucion = CASE WHEN ? = "realizado" THEN CURRENT_TIMESTAMP ELSE NULL END, updated_by = ?, updated_at = CURRENT_TIMESTAMP
                                         WHERE id = ? LIMIT 1');
     if ($stmtUpdDet) {
         $stmtUpdDet->bind_param('sssii', $nuevoEstadoDetalle, $observacion, $nuevoEstadoDetalle, $usuarioId, $ordenDetalleId);

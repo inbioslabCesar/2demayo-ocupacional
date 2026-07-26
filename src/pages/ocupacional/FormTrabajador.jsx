@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   actualizarBiometriaPacienteClinico,
+  listarCatalogosLaboralesEmpresa,
   listarEmpresasOcupacionales,
   registrarTrabajadorOcupacional,
   verificarIdentidadClinica,
@@ -45,6 +46,9 @@ export default function FormTrabajador({ onCreated }) {
   const [identidadError, setIdentidadError] = useState("");
 
   const [empresas, setEmpresas] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [puestos, setPuestos] = useState([]);
+  const [catalogosLoading, setCatalogosLoading] = useState(false);
   const [laborData, setLaborData] = useState(initialLaborData);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
@@ -157,6 +161,42 @@ export default function FormTrabajador({ onCreated }) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const empresaId = Number(laborData.empresa_id || 0);
+    if (!empresaId) {
+      setAreas([]);
+      setPuestos([]);
+      return undefined;
+    }
+
+    setCatalogosLoading(true);
+    Promise.all([
+      listarCatalogosLaboralesEmpresa({ empresaId, tipo: "area", estado: "activo" }),
+      listarCatalogosLaboralesEmpresa({ empresaId, tipo: "puesto", estado: "activo" }),
+    ])
+      .then(([areasData, puestosData]) => {
+        if (!cancelled) {
+          setAreas(Array.isArray(areasData) ? areasData : []);
+          setPuestos(Array.isArray(puestosData) ? puestosData : []);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAreas([]);
+          setPuestos([]);
+          setServerError(error.message || "No se pudieron cargar áreas y puestos de la empresa.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogosLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [laborData.empresa_id]);
+
   const canVerify = useMemo(() => validarDocumento(documentoNumero), [documentoNumero]);
   const canSubmit = useMemo(() => identidad?.id && !saving, [identidad, saving]);
 
@@ -187,7 +227,9 @@ export default function FormTrabajador({ onCreated }) {
 
   const onLaborChange = (field) => (event) => {
     const value = event.target.value;
-    setLaborData((prev) => ({ ...prev, [field]: value }));
+    setLaborData((prev) => field === "empresa_id"
+      ? { ...prev, empresa_id: value, puesto_trabajo: "", area_riesgo: "" }
+      : { ...prev, [field]: value });
     setServerError("");
     setServerMessage("");
   };
@@ -205,7 +247,7 @@ export default function FormTrabajador({ onCreated }) {
     setServerError("");
 
     try {
-      await registrarTrabajadorOcupacional({
+      const registered = await registrarTrabajadorOcupacional({
         empresa_id: Number(laborData.empresa_id),
         external_patient_id: Number(identidad.id),
         documento_tipo: identidad.documento_tipo || documentoTipo,
@@ -224,7 +266,7 @@ export default function FormTrabajador({ onCreated }) {
       setBioPayload({ firma_digital: "", huella_digital: "", fotografia: "" });
       setErrors({});
       if (typeof onCreated === "function") {
-        onCreated();
+        onCreated(registered);
       }
     } catch (error) {
       setServerError(error.message || "No se pudo registrar el trabajador.");
@@ -363,28 +405,31 @@ export default function FormTrabajador({ onCreated }) {
 
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Puesto de trabajo *</label>
-          <input
+          <select
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
             value={laborData.puesto_trabajo}
             onChange={onLaborChange("puesto_trabajo")}
-            disabled={!identidad?.id}
-            placeholder="Operario, tecnico, supervisor..."
-          />
+            disabled={!identidad?.id || !laborData.empresa_id || catalogosLoading}
+          >
+            <option value="">{catalogosLoading ? "Cargando puestos..." : "Seleccione puesto"}</option>
+            {puestos.map((puesto) => <option key={puesto.id} value={puesto.nombre}>{puesto.nombre}</option>)}
+          </select>
+          {!catalogosLoading && laborData.empresa_id && puestos.length === 0 ? (
+            <p className="mt-1 text-xs text-amber-700">Esta empresa no tiene puestos activos. Créelos desde Empresas &gt; Puesto.</p>
+          ) : null}
           {errors.puesto_trabajo ? <p className="mt-1 text-xs text-red-600">{errors.puesto_trabajo}</p> : null}
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Area de riesgo</label>
+          <label className="mb-1 block text-sm font-medium text-slate-700">Área</label>
           <select
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
             value={laborData.area_riesgo}
             onChange={onLaborChange("area_riesgo")}
-            disabled={!identidad?.id}
+            disabled={!identidad?.id || !laborData.empresa_id || catalogosLoading}
           >
-            <option value="">Seleccione</option>
-            <option value="bajo">Bajo</option>
-            <option value="medio">Medio</option>
-            <option value="alto">Alto</option>
+            <option value="">{catalogosLoading ? "Cargando áreas..." : "Seleccione área"}</option>
+            {areas.map((area) => <option key={area.id} value={area.nombre}>{area.nombre}</option>)}
           </select>
         </div>
 

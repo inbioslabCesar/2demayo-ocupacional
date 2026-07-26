@@ -3,6 +3,7 @@ import {
   listarEmpresasOcupacionales,
   listarCatalogoEmpresaExamenesPaginado,
   actualizarCatalogoEmpresaExamen,
+  obtenerImpactoCatalogoEmpresaExamen,
 } from "../../api/ocupacionalApi";
 
 export default function CatalogoEmpresaExamenesPage() {
@@ -35,13 +36,11 @@ export default function CatalogoEmpresaExamenesPage() {
     try {
       const data = await listarEmpresasOcupacionales({ estado: "activo" });
       setEmpresas(data);
-      if (!empresaId && data.length > 0) {
-        setEmpresaId(Number(data[0].id));
-      }
+      setEmpresaId((actual) => actual || (data.length > 0 ? Number(data[0].id) : 0));
     } catch (err) {
       setError(err.message || "No se pudo cargar empresas");
     }
-  }, [empresaId]);
+  }, []);
 
   useEffect(() => {
     cargarEmpresas();
@@ -70,6 +69,7 @@ export default function CatalogoEmpresaExamenesPage() {
       }
       setRows(payload.data || []);
       setMeta(payload.meta || { page: 1, per_page: perPage, total: 0, total_pages: 0 });
+      return payload;
     } catch (err) {
       if (requestId === requestRef.current) {
         setError(err.message || "No se pudo cargar catalogo");
@@ -97,23 +97,34 @@ export default function CatalogoEmpresaExamenesPage() {
     const nuevoEstado = !item.habilitado;
 
     try {
+      if (!nuevoEstado) {
+        const impacto = await obtenerImpactoCatalogoEmpresaExamen({
+          empresaId,
+          examenId: item.examen_id,
+        });
+        const protocolos = Number(impacto.protocolos_configurados || 0);
+        const montos = Number(impacto.montos_configurados || 0);
+        const condiciones = Number(impacto.condiciones_configuradas || 0);
+        const confirmado = window.confirm(
+          `Desactivar ${item.descripcion}?\n\n` +
+          `Protocolos configurados: ${protocolos}\n` +
+          `Montos configurados: ${montos}\n` +
+          `Condiciones: ${condiciones}\n\n` +
+          "Dejara de aparecer en protocolos y ordenes nuevas. La configuracion se conservara para una posible reactivacion."
+        );
+        if (!confirmado) return;
+      }
+
       await actualizarCatalogoEmpresaExamen({
         empresaId,
         examenId: item.examen_id,
         habilitado: nuevoEstado,
       });
-
-      setRows((prev) =>
-        prev.map((row) =>
-          Number(row.examen_id) === Number(item.examen_id)
-            ? {
-                ...row,
-                habilitado: nuevoEstado,
-                catalogo_estado: nuevoEstado ? "activo" : "inactivo",
-              }
-            : row
-        )
-      );
+      const payload = await cargarCatalogo();
+      const paginas = Number(payload?.meta?.total_pages || 0);
+      if (paginas > 0 && page > paginas) {
+        setPage(paginas);
+      }
     } catch (err) {
       setError(err.message || "No se pudo actualizar catalogo");
     } finally {

@@ -28,6 +28,7 @@ function ensure_medicos_profesional_columns($conn) {
         'abreviatura_profesional' => "ALTER TABLE medicos ADD COLUMN abreviatura_profesional VARCHAR(20) NOT NULL DEFAULT 'Dr(a).'",
         'colegio_sigla' => "ALTER TABLE medicos ADD COLUMN colegio_sigla VARCHAR(20) NULL",
         'nro_colegiatura' => "ALTER TABLE medicos ADD COLUMN nro_colegiatura VARCHAR(30) NULL",
+        'rna' => "ALTER TABLE medicos ADD COLUMN rna VARCHAR(30) NULL AFTER rne",
     ];
 
     foreach ($checks as $col => $sqlAlter) {
@@ -152,6 +153,24 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
+        if (($_GET['accion'] ?? '') === 'catalogo_certificadores') {
+            $sql = "SELECT id, nombre, apellido, especialidad, cmp, rne, rna,
+                           tipo_profesional, nro_colegiatura,
+                           CASE WHEN firma IS NOT NULL AND TRIM(firma) <> '' THEN 1 ELSE 0 END AS tiene_firma
+                    FROM medicos
+                    WHERE tipo_profesional = 'medico'
+                    ORDER BY apellido ASC, nombre ASC";
+            $res = $conn->query($sql);
+            $rows = [];
+            while ($row = $res->fetch_assoc()) {
+                $row['id'] = intval($row['id']);
+                $row['tiene_firma'] = intval($row['tiene_firma']);
+                $rows[] = $row;
+            }
+            echo json_encode(['success' => true, 'medicos' => $rows]);
+            exit;
+        }
+
         // Listar médicos
         $sql = "SELECT m.*, c.modalidad_pago, c.monto_hora, c.frecuencia_pago, c.permite_adelanto,
                        c.tope_adelanto_periodo, c.vigencia_desde, c.vigencia_hasta
@@ -191,6 +210,7 @@ switch ($method) {
         $password = $data['password'] ?? null;
         $cmp = $data['cmp'] ?? null;
         $rne = $data['rne'] ?? null;
+        $rna = trim((string)($data['rna'] ?? ''));
         $firma = $data['firma'] ?? null;
         $tipo_profesional = normalizar_tipo_profesional($data['tipo_profesional'] ?? 'medico');
         $abreviatura_profesional = trim((string)($data['abreviatura_profesional'] ?? ''));
@@ -268,6 +288,11 @@ switch ($method) {
             echo json_encode(['success' => false, 'error' => 'Formato de RNE inválido. Solo letras y números, máximo 20 caracteres.']);
             exit;
         }
+
+        if ($rna !== '' && !preg_match('/^[A-Za-z0-9\-]{1,30}$/', $rna)) {
+            echo json_encode(['success' => false, 'error' => 'Formato de RNA inválido. Solo letras, números y guion, máximo 30 caracteres.']);
+            exit;
+        }
         
         // Validar firma si está presente
         if (!empty($firma) && !preg_match('/^data:image\/(png|jpeg|jpg);base64,/', $firma)) {
@@ -282,8 +307,8 @@ switch ($method) {
         }
         
         $password_hash = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $conn->prepare('INSERT INTO medicos (nombre, apellido, especialidad, email, password, cmp, rne, firma, tipo_profesional, abreviatura_profesional, colegio_sigla, nro_colegiatura, dni, direccion, telefono, celular) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        $stmt->bind_param('ssssssssssssssss', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular);
+        $stmt = $conn->prepare('INSERT INTO medicos (nombre, apellido, especialidad, email, password, cmp, rne, rna, firma, tipo_profesional, abreviatura_profesional, colegio_sigla, nro_colegiatura, dni, direccion, telefono, celular) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->bind_param('sssssssssssssssss', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $rna, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular);
         $ok = $stmt->execute();
         $newId = $ok ? intval($stmt->insert_id) : null;
         $stmt->close();
@@ -305,6 +330,7 @@ switch ($method) {
         $password = $data['password'] ?? null;
         $cmp = $data['cmp'] ?? null;
         $rne = $data['rne'] ?? null;
+        $rna = trim((string)($data['rna'] ?? ''));
         $firma = $data['firma'] ?? null;
         $tipo_profesional = normalizar_tipo_profesional($data['tipo_profesional'] ?? 'medico');
         $abreviatura_profesional = trim((string)($data['abreviatura_profesional'] ?? ''));
@@ -394,6 +420,11 @@ switch ($method) {
             echo json_encode(['success' => false, 'error' => 'Formato de RNE inválido. Solo letras y números, máximo 20 caracteres.']);
             exit;
         }
+
+        if ($rna !== '' && !preg_match('/^[A-Za-z0-9\-]{1,30}$/', $rna)) {
+            echo json_encode(['success' => false, 'error' => 'Formato de RNA inválido. Solo letras, números y guion, máximo 30 caracteres.']);
+            exit;
+        }
         
         // Validar firma si está presente
         if (!empty($firma) && !preg_match('/^data:image\/(png|jpeg|jpg);base64,/', $firma)) {
@@ -409,11 +440,11 @@ switch ($method) {
         
         if (!empty($password)) {
             $password_hash = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, password=?, cmp=?, rne=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=?, dni=?, direccion=?, telefono=?, celular=? WHERE id=?');
-            $stmt->bind_param('ssssssssssssssssi', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular, $id);
+            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, password=?, cmp=?, rne=?, rna=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=?, dni=?, direccion=?, telefono=?, celular=? WHERE id=?');
+            $stmt->bind_param('sssssssssssssssssi', $nombre, $apellido, $especialidad, $email, $password_hash, $cmp, $rne, $rna, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular, $id);
         } else {
-            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, cmp=?, rne=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=?, dni=?, direccion=?, telefono=?, celular=? WHERE id=?');
-            $stmt->bind_param('sssssssssssssssi', $nombre, $apellido, $especialidad, $email, $cmp, $rne, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular, $id);
+            $stmt = $conn->prepare('UPDATE medicos SET nombre=?, apellido=?, especialidad=?, email=?, cmp=?, rne=?, rna=?, firma=?, tipo_profesional=?, abreviatura_profesional=?, colegio_sigla=?, nro_colegiatura=?, dni=?, direccion=?, telefono=?, celular=? WHERE id=?');
+            $stmt->bind_param('ssssssssssssssssi', $nombre, $apellido, $especialidad, $email, $cmp, $rne, $rna, $firma, $tipo_profesional, $abreviatura_profesional, $colegio_sigla, $nro_colegiatura, $dni, $direccion, $telefono, $celular, $id);
         }
         $ok = $stmt->execute();
         $stmt->close();

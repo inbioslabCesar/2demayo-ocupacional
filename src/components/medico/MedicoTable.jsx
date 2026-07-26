@@ -176,7 +176,11 @@ const MedicoTable = ({
                       </div>
                       <div>
                         <div className="font-semibold text-gray-900">{formatProfesionalName(medico)}</div>
-                        <div className="text-sm text-gray-500">ID: {medico.id}</div>
+                        <div className="text-sm text-gray-500">
+                          CMP: {medico.cmp || medico.nro_colegiatura || '-'}
+                          {medico.rne ? ` · RNE: ${medico.rne}` : ''}
+                          {medico.rna ? ` · RNA: ${medico.rna}` : ''}
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -263,7 +267,11 @@ const MedicoTable = ({
                 </div>
                 <div>
                   <h3 className="font-bold text-gray-900">{formatProfesionalName(medico)}</h3>
-                  <p className="text-gray-600 text-sm">ID: #{medico.id}</p>
+                  <p className="text-gray-600 text-sm">
+                    CMP: {medico.cmp || medico.nro_colegiatura || '-'}
+                    {medico.rne ? ` · RNE: ${medico.rne}` : ''}
+                    {medico.rna ? ` · RNA: ${medico.rna}` : ''}
+                  </p>
                 </div>
               </div>
               <div className="flex gap-2">

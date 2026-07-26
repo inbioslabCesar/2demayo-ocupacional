@@ -13,6 +13,7 @@ export default function ConfiguracionProfesionalMedico({ isOpen, onClose }) {
     nro_colegiatura: '',
     cmp: '',
     rne: '',
+    rna: '',
     firma: null
   });
   
@@ -47,6 +48,7 @@ export default function ConfiguracionProfesionalMedico({ isOpen, onClose }) {
           nro_colegiatura: data.medico.nro_colegiatura || data.medico.cmp || '',
           cmp: data.medico.cmp || '',
           rne: data.medico.rne || '',
+          rna: data.medico.rna || '',
           firma: data.medico.firma
         };
         setInfoProfesional(info);
@@ -336,6 +338,21 @@ export default function ConfiguracionProfesionalMedico({ isOpen, onClose }) {
                 />
                 <p className="text-xs text-gray-500 mt-1">Solo para médicos especialistas</p>
               </div>
+
+              {String(infoProfesional.tipo_profesional || 'medico') === 'medico' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">R.N.A. (opcional)</label>
+                  <input
+                    type="text"
+                    value={infoProfesional.rna || ''}
+                    onChange={(e) => handleInputChange('rna', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                    placeholder="Ej: 549"
+                    maxLength={30}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Registro adicional, cuando corresponda.</p>
+                </div>
+              )}
             </div>
           </div>
 

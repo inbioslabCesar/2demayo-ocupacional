@@ -128,6 +128,7 @@ const SolicitudImagenPage = lazy(() => import("./pages/SolicitudImagenPage.jsx")
 const ContratosPage = lazy(() => import("./pages/ContratosPage.jsx"));
 const EmpresasOcupacionalesPage = lazy(() => import("./pages/ocupacional/EmpresasOcupacionalesPage.jsx"));
 const TrabajadoresOcupacionalesPage = lazy(() => import("./pages/ocupacional/TrabajadoresOcupacionalesPage.jsx"));
+const CatalogosLaboralesEmpresaPage = lazy(() => import("./pages/ocupacional/CatalogosLaboralesEmpresaPage.jsx"));
 const ExamenesOcupacionalesPage = lazy(() => import("./pages/ocupacional/ExamenesOcupacionalesPage.jsx"));
 const TiposEvaluacionOcupacionalesPage = lazy(() => import("./pages/ocupacional/TiposEvaluacionOcupacionalesPage.jsx"));
 const GruposExamenesOcupacionalesPage = lazy(() => import("./pages/ocupacional/GruposExamenesOcupacionalesPage.jsx"));
@@ -1152,6 +1153,18 @@ function App() {
                         permisosRequeridos={["access_salud_ocupacional", "registrar_trabajadores_ocupacional"]}
                       >
                         <TrabajadoresOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/salud-ocupacional/catalogos-laborales"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["administrador", "recepcionista"]}
+                        permisosRequeridos={["access_salud_ocupacional", "gestionar_empresas_ocupacional"]}
+                      >
+                        <CatalogosLaboralesEmpresaPage />
                       </ProtectedRoute>
                     }
                   />

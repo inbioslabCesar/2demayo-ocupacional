@@ -161,16 +161,20 @@ if (!$cab) {
 }
 
 $stmtDet = $mysqliOcup->prepare('SELECT
-                                    id,
-                                    examen_codigo,
-                                    examen_descripcion,
-                                    monto,
-                                    estado_ejecucion,
-                                    observacion_ejecucion,
-                                    fecha_ejecucion
-                                 FROM ocupacional_orden_detalle
-                                 WHERE orden_id = ?
-                                 ORDER BY id ASC');
+                                                                        d.id,
+                                                                        d.examen_codigo,
+                                                                        d.examen_descripcion,
+                                                                        d.monto,
+                                                                        d.estado_ejecucion,
+                                                                        d.observacion_ejecucion,
+                                                                        d.fecha_ejecucion,
+                                                                        EXISTS (
+                                                                            SELECT 1 FROM ocupacional_resultados_clinicos rc
+                                                                            WHERE rc.orden_detalle_id = d.id AND rc.estado = "finalizado"
+                                                                        ) AS resultado_finalizado
+                                                                 FROM ocupacional_orden_detalle d
+                                                                 WHERE d.orden_id = ?
+                                                                 ORDER BY d.id ASC');
 if (!$stmtDet) {
     out_clin(500, ['success' => false, 'error' => 'No se pudo consultar detalle clinico de orden']);
 }
@@ -184,7 +188,7 @@ $totalCompletados = 0;
 $totalObservados = 0;
 while ($row = $resDet->fetch_assoc()) {
     $estadoEjec = (string)($row['estado_ejecucion'] ?? 'pendiente');
-    if (in_array($estadoEjec, ['realizado', 'observado'], true)) {
+    if ($estadoEjec === 'realizado' && (int)($row['resultado_finalizado'] ?? 0) === 1) {
         $totalCompletados++;
     }
     if ($estadoEjec === 'observado') {
@@ -200,6 +204,7 @@ while ($row = $resDet->fetch_assoc()) {
         'estado_ejecucion' => $estadoEjec,
         'observacion_ejecucion' => (string)($row['observacion_ejecucion'] ?? ''),
         'fecha_ejecucion' => (string)($row['fecha_ejecucion'] ?? ''),
+        'resultado_finalizado' => (int)($row['resultado_finalizado'] ?? 0) === 1,
     ];
 }
 $stmtDet->close();
@@ -227,6 +232,18 @@ $resumen = [
     'porcentaje_avance' => $totalItems > 0 ? (int)round(($totalCompletados / $totalItems) * 100) : 0,
     'historias_registradas' => count($historias),
 ];
+
+$stmtInter = $mysqliOcup->prepare('SELECT COUNT(*) AS total
+                                   FROM ocupacional_interconsultas
+                                   WHERE orden_id = ? AND estado IN ("solicitada", "respondida")');
+if ($stmtInter) {
+    $stmtInter->bind_param('i', $ordenId);
+    $stmtInter->execute();
+    $resumen['interconsultas_abiertas'] = (int)($stmtInter->get_result()->fetch_assoc()['total'] ?? 0);
+    $stmtInter->close();
+} else {
+    $resumen['interconsultas_abiertas'] = 0;
+}
 
 out_clin(200, [
     'success' => true,

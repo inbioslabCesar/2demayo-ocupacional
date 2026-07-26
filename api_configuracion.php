@@ -183,6 +183,7 @@ try {
         'logo_size_sistema' => "ALTER TABLE configuracion_clinica ADD COLUMN logo_size_sistema VARCHAR(10) DEFAULT NULL",
         'logo_size_publico' => "ALTER TABLE configuracion_clinica ADD COLUMN logo_size_publico VARCHAR(10) DEFAULT NULL",
         'logo_shape_sistema' => "ALTER TABLE configuracion_clinica ADD COLUMN logo_shape_sistema VARCHAR(10) DEFAULT 'auto'",
+        'logo_ocupacional_url' => "ALTER TABLE configuracion_clinica ADD COLUMN logo_ocupacional_url VARCHAR(500) DEFAULT NULL",
         'caratula_fondo_url' => "ALTER TABLE configuracion_clinica ADD COLUMN caratula_fondo_url VARCHAR(500) DEFAULT NULL",
         'hc_template_mode' => "ALTER TABLE configuracion_clinica ADD COLUMN hc_template_mode VARCHAR(20) DEFAULT 'auto'",
         'hc_template_single_id' => "ALTER TABLE configuracion_clinica ADD COLUMN hc_template_single_id VARCHAR(100) DEFAULT NULL",
@@ -209,6 +210,7 @@ try {
                     'email' => '',
                     'horario_atencion' => 'Lunes a Viernes: 7:00 AM - 8:00 PM\nSábados: 7:00 AM - 2:00 PM',
                     'logo_url' => null,
+                    'logo_ocupacional_url' => null,
                     'website' => null,
                     'ruc' => null,
                     'especialidades' => null,
@@ -260,6 +262,19 @@ try {
             $logoSizeSistema = normalize_logo_size_option($input['logo_size_sistema'] ?? null);
             $logoSizePublico = normalize_logo_size_option($input['logo_size_publico'] ?? null);
             $logoShapeSistema = normalize_logo_shape_option($input['logo_shape_sistema'] ?? 'auto');
+            $logoOcupacionalUrl = null;
+            if (isset($input['logo_ocupacional_url'])) {
+                $logoOcupacionalRaw = trim((string)$input['logo_ocupacional_url']);
+                if ($logoOcupacionalRaw !== '') {
+                    $logoOcupacionalRaw = str_replace('\\', '/', $logoOcupacionalRaw);
+                    if (preg_match('~(?:^|/)(uploads/[^?#\s]+)$~i', $logoOcupacionalRaw, $logoOcupacionalMatch) && !empty($logoOcupacionalMatch[1])) {
+                        $logoOcupacionalRaw = ltrim($logoOcupacionalMatch[1], '/');
+                    } else {
+                        $logoOcupacionalRaw = ltrim((string)preg_replace('#^\./#', '', $logoOcupacionalRaw), '/');
+                    }
+                    $logoOcupacionalUrl = $logoOcupacionalRaw;
+                }
+            }
             $caratulaFondoUrl = null;
             if (isset($input['caratula_fondo_url'])) {
                 $caratulaRaw = trim((string)$input['caratula_fondo_url']);
@@ -344,7 +359,7 @@ try {
                 $stmt = $pdo->prepare("
                     UPDATE configuracion_clinica 
                     SET nombre_clinica = ?, direccion = ?, telefono = ?, email = ?, 
-                        horario_atencion = ?, logo_url = ?, website = ?, ruc = ?,
+                        horario_atencion = ?, logo_url = ?, logo_ocupacional_url = ?, website = ?, ruc = ?,
                         especialidades = ?, mision = ?, vision = ?, valores = ?,
                         director_general = ?, jefe_enfermeria = ?, contacto_emergencias = ?,
                         celular = ?, google_maps_embed = ?,
@@ -363,6 +378,7 @@ try {
                     $input['email'],
                     $input['horario_atencion'] ?? '',
                     $logoUrlNormalizado,
+                    $logoOcupacionalUrl,
                     $input['website'] ?? null,
                     $input['ruc'] ?? null,
                     $input['especialidades'] ?? null,
@@ -396,12 +412,12 @@ try {
                 // Insertar nueva configuración
                 $stmt = $pdo->prepare("
                     INSERT INTO configuracion_clinica 
-                    (nombre_clinica, direccion, telefono, email, horario_atencion, logo_url, website, ruc,
+                    (nombre_clinica, direccion, telefono, email, horario_atencion, logo_url, logo_ocupacional_url, website, ruc,
                      especialidades, mision, vision, valores, director_general, jefe_enfermeria, contacto_emergencias,
                      celular, google_maps_embed, slogan, slogan_color, nombre_color, nombre_font_size,
                      logo_size_sistema, logo_size_publico, logo_shape_sistema, caratula_fondo_url,
                      hc_template_mode, hc_template_single_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ");
                 
                 $stmt->execute([
@@ -411,6 +427,7 @@ try {
                     $input['email'],
                     $input['horario_atencion'] ?? '',
                     $logoUrlNormalizado,
+                    $logoOcupacionalUrl,
                     $input['website'] ?? null,
                     $input['ruc'] ?? null,
                     $input['especialidades'] ?? null,

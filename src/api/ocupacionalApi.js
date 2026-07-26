@@ -46,13 +46,53 @@ async function parseJsonWithDetails(response) {
 
 export async function listarEmpresasOcupacionales({ estado = "activo" } = {}) {
   const params = new URLSearchParams({
+    accion: "catalogo",
     estado,
-    page: "1",
-    per_page: "200",
   });
   const response = await fetch(`${BASE_URL}api_ocupacional_empresas.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);
   return payload.data || [];
+}
+
+export async function listarCatalogosLaboralesEmpresa({ empresaId, tipo, estado = "activo" } = {}) {
+  const params = new URLSearchParams({
+    empresa_id: String(Number(empresaId || 0)),
+    tipo: String(tipo || "").trim().toLowerCase(),
+    estado,
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_catalogos_laborales.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function guardarCatalogoLaboralEmpresa({ id, empresaId, tipo, nombre } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_catalogos_laborales.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "guardar",
+      ...(id ? { id: Number(id) } : {}),
+      empresa_id: Number(empresaId || 0),
+      tipo: String(tipo || "").trim().toLowerCase(),
+      nombre: String(nombre || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function cambiarEstadoCatalogoLaboralEmpresa({ id, estado } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_catalogos_laborales.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "cambiar_estado",
+      id: Number(id || 0),
+      estado: String(estado || "").trim().toLowerCase(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
 }
 
 export async function listarUbigeoDepartamentos() {
@@ -302,6 +342,31 @@ export async function darBajaTrabajadorOcupacional(id) {
   return payload;
 }
 
+export async function actualizarTrabajadorOcupacional({ id, puestoTrabajo, areaRiesgo, tipoContrato, fechaIngreso }) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_trabajadores_gestion.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "actualizar",
+      id: Number(id || 0),
+      puesto_trabajo: String(puestoTrabajo || "").trim(),
+      area_riesgo: String(areaRiesgo || "").trim(),
+      tipo_contrato: String(tipoContrato || "").trim(),
+      fecha_ingreso: String(fechaIngreso || "").trim(),
+    }),
+  });
+  return parseJsonOrThrow(response);
+}
+
+export async function anularTrabajadorOcupacional({ id, motivo }) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_trabajadores_gestion.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ accion: "anular", id: Number(id || 0), motivo: String(motivo || "").trim() }),
+  });
+  return parseJsonOrThrow(response);
+}
+
 export async function listarExamenesOcupacionalesPaginado({
   estado = "activo",
   q = "",
@@ -462,6 +527,23 @@ export async function actualizarCatalogoEmpresaExamen({ empresaId, examenId, hab
   return payload.data;
 }
 
+export async function obtenerImpactoCatalogoEmpresaExamen({ empresaId, examenId } = {}) {
+  const params = new URLSearchParams({
+    accion: "impacto",
+    empresa_id: String(empresaId || 0),
+    examen_id: String(examenId || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_catalogo.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || {
+    catalogo_id: null,
+    estado: "inactivo",
+    protocolos_configurados: 0,
+    montos_configurados: 0,
+    condiciones_configuradas: 0,
+  };
+}
+
 export async function listarTiposEvaluacionOcupacional() {
   const params = new URLSearchParams({ accion: "tipos" });
   const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php?${params.toString()}`);
@@ -534,7 +616,7 @@ export async function listarProtocolosOcupacionales({ empresaId, estado = "activ
   return payload.data || [];
 }
 
-export async function guardarProtocoloOcupacional({ id, empresaId, descripcion, sembrarMontosBase = true }) {
+export async function guardarProtocoloOcupacional({ id, empresaId, descripcion, sembrarMontosBase = false }) {
   const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
     method: "POST",
     headers: jsonHeaders,
@@ -681,11 +763,16 @@ export async function guardarCondicionProtocoloOcupacional({
   return payload.data;
 }
 
-export async function eliminarCondicionProtocoloOcupacional(id) {
+export async function eliminarCondicionProtocoloOcupacional({ id, protocoloId, catalogoId } = {}) {
   const response = await fetch(`${BASE_URL}api_ocupacional_protocolos.php`, {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ accion: "eliminar_condicion", id: Number(id) }),
+    body: JSON.stringify({
+      accion: "eliminar_condicion",
+      id: Number(id),
+      protocolo_id: Number(protocoloId),
+      catalogo_id: Number(catalogoId),
+    }),
   });
   const payload = await parseJsonOrThrow(response);
   return payload;
@@ -747,6 +834,7 @@ export async function registrarOrdenOcupacional({
   observacion,
   subcontrataEmpresaId = 0,
   facturarEmpresaId = 0,
+  medicoResponsableId = 0,
   firmaDoctor = "GALLEGOS",
   modo = "CONVALIDACION",
   gestante = false,
@@ -766,6 +854,7 @@ export async function registrarOrdenOcupacional({
       observacion: String(observacion || "").trim(),
       subcontrata_empresa_id: Number(subcontrataEmpresaId || 0),
       facturar_empresa_id: Number(facturarEmpresaId || 0),
+      medico_responsable_id: Number(medicoResponsableId || 0),
       firma_doctor: String(firmaDoctor || "").trim(),
       modo: String(modo || "").trim(),
       gestante: Boolean(gestante),
@@ -951,6 +1040,19 @@ export async function guardarResultadoClinicoOcupacional({
   return payload.data || null;
 }
 
+export async function registrarEmisionPdfResultadoClinicoOcupacional({ ordenDetalleId, formatoCodigo } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "registrar_emision_pdf",
+      orden_detalle_id: Number(ordenDetalleId) || 0,
+      formato_codigo: String(formatoCodigo || "").trim(),
+    }),
+  });
+  return await parseJsonOrThrow(response);
+}
+
 export async function listarOrdenesOcupacionalesPaginado({
   empresaId = 0,
   estado = "",
@@ -1025,7 +1127,7 @@ export async function guardarAptitudOrdenOcupacional({
   aptitudFinal,
   restriccionFinal,
   recomendacionFinal,
-  medicoResponsable,
+  medicoResponsableId,
 } = {}) {
   const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
     method: "POST",
@@ -1036,7 +1138,7 @@ export async function guardarAptitudOrdenOcupacional({
       aptitud_final: String(aptitudFinal || "").trim(),
       restriccion_final: String(restriccionFinal || "").trim(),
       recomendacion_final: String(recomendacionFinal || "").trim(),
-      medico_responsable: String(medicoResponsable || "").trim(),
+      medico_responsable_id: Number(medicoResponsableId || 0),
     }),
   });
   const payload = await parseJsonOrThrow(response);
@@ -1074,6 +1176,95 @@ export async function actualizarDetalleOrdenOcupacional({
       estado_ejecucion: String(estadoEjecucion || "").trim(),
       observacion_ejecucion: String(observacionEjecucion || "").trim(),
     }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function listarInterconsultasOcupacionales(ordenId) {
+  const params = new URLSearchParams({ orden_id: String(Number(ordenId) || 0) });
+  const response = await fetch(`${BASE_URL}api_ocupacional_interconsultas.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || [];
+}
+
+export async function crearInterconsultaOcupacional({
+  ordenId,
+  ordenDetalleId,
+  especialidad,
+  motivo,
+  diagnosticoCie10 = "",
+  diagnosticoDescripcion = "",
+  observaciones = "",
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_interconsultas.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "crear",
+      orden_id: Number(ordenId),
+      orden_detalle_id: Number(ordenDetalleId),
+      especialidad: String(especialidad || "").trim(),
+      motivo: String(motivo || "").trim(),
+      diagnostico_cie10: String(diagnosticoCie10 || "").trim(),
+      diagnostico_descripcion: String(diagnosticoDescripcion || "").trim(),
+      observaciones: String(observaciones || "").trim(),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function responderInterconsultaOcupacional({
+  id,
+  especialistaNombre,
+  respuesta,
+  respuestaArchivo = null,
+} = {}) {
+  const formData = new FormData();
+  formData.append("accion", "responder");
+  formData.append("id", String(Number(id) || 0));
+  formData.append("especialista_nombre", String(especialistaNombre || "").trim());
+  formData.append("respuesta", String(respuesta || "").trim());
+  if (respuestaArchivo instanceof File) {
+    formData.append("respuesta_archivo", respuestaArchivo);
+  }
+  const response = await fetch(`${BASE_URL}api_ocupacional_interconsultas.php`, {
+    method: "POST",
+    body: formData,
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function levantarInterconsultaOcupacional({
+  id,
+  levantamiento,
+  recomendacion,
+  resultadoLevantamiento,
+  medicoId,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_interconsultas.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "levantar",
+      id: Number(id),
+      levantamiento: String(levantamiento || "").trim(),
+      recomendacion: String(recomendacion || "").trim(),
+      resultado_levantamiento: String(resultadoLevantamiento || "").trim(),
+      medico_id: Number(medicoId || 0),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function anularInterconsultaOcupacional(id, motivo) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_interconsultas.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ accion: "anular", id: Number(id), motivo: String(motivo || "").trim() }),
   });
   const payload = await parseJsonOrThrow(response);
   return payload.data;

@@ -80,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $sortBy = $sortMap[$sortByRaw] ?? 'p.fecha_ingreso';
     $sortDir = $sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
-    if (!in_array($estado, ['activo', 'retirado', 'todos'], true)) {
+    if (!in_array($estado, ['activo', 'retirado', 'anulado', 'todos'], true)) {
         reply(422, ['success' => false, 'error' => 'Filtro estado invalido']);
     }
 
@@ -101,12 +101,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     if ($q !== '') {
-        $where[] = '(p.documento_numero LIKE ? OR p.puesto_trabajo LIKE ? OR e.razon_social LIKE ?)';
         $term = '%' . $q . '%';
+        $identityIds = [];
+        $stmtIdentitySearch = $mysqli->prepare('SELECT id FROM pacientes
+                                                WHERE nombre LIKE ? OR apellido LIKE ?
+                                                   OR CONCAT(TRIM(nombre), " ", TRIM(apellido)) LIKE ?');
+        if ($stmtIdentitySearch) {
+            $stmtIdentitySearch->bind_param('sss', $term, $term, $term);
+            $stmtIdentitySearch->execute();
+            $resIdentitySearch = $stmtIdentitySearch->get_result();
+            while ($identity = $resIdentitySearch->fetch_assoc()) {
+                $identityIds[] = (int) $identity['id'];
+            }
+            $stmtIdentitySearch->close();
+        }
+
+        $qConditions = ['p.documento_numero LIKE ?', 'p.puesto_trabajo LIKE ?', 'e.razon_social LIKE ?'];
         $types .= 'sss';
         $params[] = $term;
         $params[] = $term;
         $params[] = $term;
+        if (!empty($identityIds)) {
+            $qConditions[] = 'p.external_patient_id IN (' . implode(',', array_fill(0, count($identityIds), '?')) . ')';
+            $types .= str_repeat('i', count($identityIds));
+            foreach ($identityIds as $identityId) {
+                $params[] = $identityId;
+            }
+        }
+        $where[] = '(' . implode(' OR ', $qConditions) . ')';
     }
 
     $whereSql = empty($where) ? '' : (' WHERE ' . implode(' AND ', $where));
@@ -159,6 +181,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         ];
     }
     $stmtList->close();
+
+    $identidades = [];
+    $patientIds = array_values(array_unique(array_filter(array_map(
+        fn($row) => (int) ($row['external_patient_id'] ?? 0),
+        $rows
+    ))));
+    if (!empty($patientIds)) {
+        $placeholders = implode(',', array_fill(0, count($patientIds), '?'));
+        $stmtIdentidades = $mysqli->prepare('SELECT id, nombre, apellido FROM pacientes WHERE id IN (' . $placeholders . ')');
+        if ($stmtIdentidades) {
+            bindParamsDynamic($stmtIdentidades, str_repeat('i', count($patientIds)), $patientIds);
+            $stmtIdentidades->execute();
+            $resIdentidades = $stmtIdentidades->get_result();
+            while ($paciente = $resIdentidades->fetch_assoc()) {
+                $identidades[(int) $paciente['id']] = [
+                    'nombres' => trim((string) ($paciente['nombre'] ?? '')),
+                    'apellidos' => trim((string) ($paciente['apellido'] ?? '')),
+                ];
+            }
+            $stmtIdentidades->close();
+        }
+    }
+
+    foreach ($rows as &$row) {
+        $identidad = $identidades[(int) $row['external_patient_id']] ?? ['nombres' => '', 'apellidos' => ''];
+        $row['nombres'] = $identidad['nombres'];
+        $row['apellidos'] = $identidad['apellidos'];
+        $row['nombre_completo'] = trim($identidad['nombres'] . ' ' . $identidad['apellidos']);
+    }
+    unset($row);
 
     reply(200, [
         'success' => true,
@@ -259,6 +311,79 @@ if ($coreDoc !== '' && $coreDoc !== $documentoNumero) {
 
 $usuarioId = isset($_SESSION['usuario']['id']) ? (int) $_SESSION['usuario']['id'] : null;
 
+$existingStmt = $mysqliOcup->prepare('SELECT id, documento_numero, puesto_trabajo, area_riesgo, estado_laboral, fecha_ingreso
+                                      FROM pacientes_ocupacionales
+                                      WHERE empresa_id = ? AND external_patient_id = ? LIMIT 1');
+if (!$existingStmt) {
+    reply(500, ['success' => false, 'error' => 'No se pudo validar si el trabajador ya existe']);
+}
+$existingStmt->bind_param('ii', $empresaId, $externalPatientId);
+$existingStmt->execute();
+$existing = $existingStmt->get_result()->fetch_assoc();
+$existingStmt->close();
+
+if ($existing && (string) $existing['estado_laboral'] === 'activo') {
+    reply(409, [
+        'success' => false,
+        'error' => 'El paciente ya está registrado como trabajador activo en esta empresa',
+        'data' => [
+            'id' => (int) $existing['id'],
+            'documento_numero' => (string) ($existing['documento_numero'] ?? ''),
+            'puesto_trabajo' => (string) ($existing['puesto_trabajo'] ?? ''),
+            'area_riesgo' => (string) ($existing['area_riesgo'] ?? ''),
+            'estado_laboral' => 'activo',
+            'fecha_ingreso' => (string) ($existing['fecha_ingreso'] ?? ''),
+        ],
+    ]);
+}
+
+if ($existing) {
+    $existingId = (int) $existing['id'];
+    $reactivate = $mysqliOcup->prepare('UPDATE pacientes_ocupacionales
+                                       SET documento_tipo = ?, documento_numero = ?, puesto_trabajo = ?, area_riesgo = ?,
+                                           tipo_contrato = ?, estado_laboral = "activo", fecha_ingreso = ?,
+                                           anulacion_motivo = NULL, anulado_at = NULL, anulado_by = NULL,
+                                           updated_by = ?, updated_at = NOW()
+                                       WHERE id = ? LIMIT 1');
+    if (!$reactivate) {
+        reply(500, ['success' => false, 'error' => 'No se pudo preparar la reactivación del trabajador']);
+    }
+    $reactivate->bind_param(
+        'ssssssii',
+        $documentoTipo,
+        $documentoNumero,
+        $puestoTrabajo,
+        $areaRiesgo,
+        $tipoContrato,
+        $fechaIngreso,
+        $usuarioId,
+        $existingId
+    );
+    try {
+        $reactivate->execute();
+    } catch (mysqli_sql_exception $e) {
+        $reactivate->close();
+        reply(500, ['success' => false, 'error' => 'No se pudo reactivar el trabajador']);
+    }
+    $reactivate->close();
+
+    reply(200, [
+        'success' => true,
+        'message' => 'Trabajador reactivado correctamente',
+        'data' => [
+            'id' => $existingId,
+            'empresa_id' => $empresaId,
+            'external_patient_id' => $externalPatientId,
+            'documento_numero' => $documentoNumero,
+            'puesto_trabajo' => $puestoTrabajo,
+            'area_riesgo' => $areaRiesgo,
+            'estado_laboral' => 'activo',
+            'fecha_ingreso' => $fechaIngreso,
+            'reactivado' => true,
+        ],
+    ]);
+}
+
 $insert = $mysqliOcup->prepare('INSERT INTO pacientes_ocupacionales (empresa_id, external_patient_id, documento_tipo, documento_numero, puesto_trabajo, area_riesgo, tipo_contrato, estado_laboral, fecha_ingreso, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 if (!$insert) {
     reply(500, ['success' => false, 'error' => 'No se pudo preparar la insercion']);
@@ -279,7 +404,19 @@ $insert->bind_param(
     $usuarioId
 );
 
-if (!$insert->execute()) {
+$inserted = false;
+try {
+    $inserted = $insert->execute();
+} catch (mysqli_sql_exception $e) {
+    $errno = (int) $e->getCode();
+    $insert->close();
+    if ($errno === 1062) {
+        reply(409, ['success' => false, 'error' => 'El trabajador ya esta registrado en esta empresa']);
+    }
+    reply(500, ['success' => false, 'error' => 'No se pudo registrar el trabajador']);
+}
+
+if (!$inserted) {
     $errno = (int) $insert->errno;
     $insert->close();
     if ($errno === 1062) {
