@@ -138,6 +138,7 @@ function build_template_data_ocup($templateCode, $examenCodigo = '', $examenDesc
                 'saturacion_oxigeno' => '',
                 'peso_kg' => '',
                 'talla_cm' => '',
+                'perimetro_abdominal_cm' => '',
                 'imc' => '',
                 'observaciones' => '',
             ];
@@ -248,6 +249,9 @@ function validate_finalized_data_result_ocup($templateCode, $data)
         require_number_range_result_ocup($data, 'saturacion_oxigeno', 'Saturacion de oxigeno', 50, 100);
         require_number_range_result_ocup($data, 'peso_kg', 'Peso', 2, 400);
         require_number_range_result_ocup($data, 'talla_cm', 'Talla', 40, 250);
+        if (trim((string)($data['perimetro_abdominal_cm'] ?? '')) !== '') {
+            require_number_range_result_ocup($data, 'perimetro_abdominal_cm', 'Perimetro abdominal', 20, 300);
+        }
         return;
     }
 

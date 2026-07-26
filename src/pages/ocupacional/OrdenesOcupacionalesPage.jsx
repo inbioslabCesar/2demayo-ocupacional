@@ -125,6 +125,103 @@ async function fetchConfiguracionClinica() {
   return payload.data || null;
 }
 
+const ROUTE_AREA_DEFINITIONS = [
+  { title: "EVALUACION MEDICA", order: 10, aliases: ["EVALUACION MEDICA", "MEDICINA OCUPACIONAL"] },
+  { title: "OSTEOMUSCULAR", order: 20, aliases: ["OSTEOMUSCULAR", "MUSCULOESQUELET"] },
+  { title: "OFTALMOLOGIA", order: 30, aliases: ["OFTALMO", "VISION"] },
+  { title: "RADIOGRAFIA", order: 40, aliases: ["RADIOGRAF", "RAYOS X", "RAYOSX"] },
+  { title: "PSICOLOGIA", order: 50, aliases: ["PSICOLOG", "PSICOMETR"] },
+  { title: "EXAMEN DE LABORATORIO", order: 60, aliases: ["LABORATORIO", "HEMATOLOG", "BIOQUIM", "TOXICOLOG"] },
+  { title: "OTORRINOLARINGOLOGIA", order: 70, aliases: ["OTORRINO", "AUDIOMETR", "AUDICION"] },
+  { title: "ELECTROCARDIOGRAMA", order: 80, aliases: ["ELECTROCARD", "CARDIOLOG", " ECG ", " EKG "] },
+  { title: "TRIAJE", order: 90, aliases: ["TRIAJE", "TRIAGE", "SIGNOS VITALES"] },
+];
+
+function normalizeRouteText(value) {
+  return ` ${String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase()} `;
+}
+
+function resolveRouteArea(item) {
+  const groupText = normalizeRouteText(item?.examen_grupo);
+  const fullText = normalizeRouteText([
+    item?.examen_grupo,
+    item?.examen_subgrupo,
+    item?.examen_descripcion,
+    item?.examen_codigo,
+  ].filter(Boolean).join(" "));
+  const matchDefinition = (text) => ROUTE_AREA_DEFINITIONS.find((definition) => (
+    definition.aliases.some((alias) => text.includes(normalizeRouteText(alias).trim()))
+  ));
+  const definition = matchDefinition(groupText) || matchDefinition(fullText);
+  if (definition) return definition;
+
+  const rawGroup = String(item?.examen_grupo || item?.examen_subgrupo || "OTROS EXAMENES").trim().toUpperCase();
+  const configuredOrder = Number(item?.grupo_orden || 0);
+  return {
+    title: rawGroup || "OTROS EXAMENES",
+    order: configuredOrder > 0 ? configuredOrder : 85,
+    aliases: [],
+  };
+}
+
+function buildRouteGroups(items) {
+  const groups = new Map();
+  (Array.isArray(items) ? items : []).forEach((item, sourceIndex) => {
+    const area = resolveRouteArea(item);
+    if (!groups.has(area.title)) {
+      groups.set(area.title, { title: area.title, order: area.order, items: [] });
+    }
+    groups.get(area.title).items.push({ ...item, sourceIndex });
+  });
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      items: group.items.sort((left, right) => (
+        Number(left.examen_orden || 0) - Number(right.examen_orden || 0)
+        || String(left.examen_subgrupo || "").localeCompare(String(right.examen_subgrupo || ""), "es")
+        || left.sourceIndex - right.sourceIndex
+      )),
+    }))
+    .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title, "es"));
+}
+
+function escapeRouteHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function formatRouteDate(value) {
+  const parts = String(value || "").split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : String(value || "");
+}
+
+function buildRouteVitals(det) {
+  const triaje = det?.triaje && typeof det.triaje === "object" ? det.triaje : {};
+  const systolic = String(triaje.presion_sistolica || "").trim();
+  const diastolic = String(triaje.presion_diastolica || "").trim();
+  return [
+    { label: "PA", value: systolic || diastolic ? `${systolic}/${diastolic}` : "" },
+    { label: "IMC", value: triaje.imc || "" },
+    { label: "TALLA", value: triaje.talla_cm || "" },
+    { label: "PESO", value: triaje.peso_kg || "" },
+    { label: "FC", value: triaje.frecuencia_cardiaca || "" },
+    { label: "FR", value: triaje.frecuencia_respiratoria || "" },
+    { label: "T°", value: triaje.temperatura || "" },
+    { label: "P. ABD.", value: triaje.perimetro_abdominal_cm || triaje.perimetro_abdominal || "" },
+  ];
+}
+
 async function fetchMedicosCrud() {
   const response = await fetch(`${BASE_URL}api_medicos.php?accion=catalogo_certificadores`, {
     method: "GET",
@@ -319,6 +416,7 @@ function FormatoClinicoCampos({ templateCode, datos, onChange, onAudiometriaChan
           {field("saturacion_oxigeno", "Saturacion de oxigeno", { type: "number", unit: "%" })}
           {field("peso_kg", "Peso", { type: "number", unit: "kg" })}
           {field("talla_cm", "Talla", { type: "number", unit: "cm" })}
+          {field("perimetro_abdominal_cm", "Perimetro abdominal", { type: "number", unit: "cm" })}
           <CampoClinico label="IMC" value={safeDatos.imc} onChange={() => {}} unit="kg/m2" disabled />
         </div>
         {field("observaciones", "Observaciones", { multiline: true })}
@@ -398,6 +496,7 @@ function buildResultadoPdfTables(templateCode, datos) {
         ["Saturacion de oxigeno", safeDatos.saturacion_oxigeno || "-", "%"],
         ["Peso", safeDatos.peso_kg || "-", "kg"],
         ["Talla", safeDatos.talla_cm || "-", "cm"],
+        ["Perimetro abdominal", safeDatos.perimetro_abdominal_cm || "-", "cm"],
         ["IMC", safeDatos.imc || "-", "kg/m2"],
         ["Observaciones", safeDatos.observaciones || "-", ""],
       ],
@@ -1979,64 +2078,91 @@ export default function OrdenesOcupacionalesPage() {
   const onImprimir = async (ordenId) => {
     setError("");
     try {
-      const det = await obtenerDetalleOrdenOcupacional(ordenId);
+      const [det, configuracionClinica] = await Promise.all([
+        obtenerDetalleOrdenOcupacional(ordenId),
+        fetchConfiguracionClinica(),
+      ]);
       const win = window.open("", "_blank", "width=900,height=700");
       if (!win) {
         setError("No se pudo abrir ventana de impresion. Verifique bloqueador de popups.");
         return;
       }
 
-      const rowsHtml = (det.items || [])
-        .map((it, idx) => `
-          <tr>
-            <td>${idx + 1}</td>
-            <td>${it.examen_codigo}</td>
-            <td>${it.examen_descripcion}</td>
-            <td style="text-align:right;">S/ ${it.monto}</td>
+      const routeGroups = buildRouteGroups(det.items);
+      const vitals = buildRouteVitals(det);
+      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_ocupacional_url || configuracionClinica?.logo_url || "");
+      const rowsHtml = routeGroups
+        .map((group) => `
+          <tr class="area-title">
+            <td>${escapeRouteHtml(group.title)}</td>
+            <td></td>
           </tr>
+          ${group.items.map((item) => `
+            <tr class="exam-row">
+              <td>${escapeRouteHtml(item.examen_descripcion)}</td>
+              <td></td>
+            </tr>
+          `).join("")}
         `)
         .join("");
+      const vitalsHead = vitals.map((item) => `<th>${escapeRouteHtml(item.label)}</th>`).join("");
+      const vitalsValues = vitals.map((item) => `<td>${escapeRouteHtml(item.value)}</td>`).join("");
+      const protocoloEmpresa = `${String(det.protocolo_descripcion || "PROTOCOLO").toUpperCase()} - ${String(det.empresa || "").toUpperCase()}`;
 
       win.document.write(`
         <html>
           <head>
-            <title>Orden ${det.codigo}</title>
+            <title>Hoja de ruta ${escapeRouteHtml(det.codigo)}</title>
             <style>
-              body { font-family: Arial, sans-serif; color:#111; margin:24px; }
-              h1 { margin:0 0 8px; font-size:20px; }
-              .meta { font-size:12px; margin-bottom:14px; line-height:1.5; }
-              table { width:100%; border-collapse:collapse; font-size:12px; }
-              th, td { border:1px solid #d1d5db; padding:6px 8px; }
-              th { background:#f1f5f9; text-align:left; }
-              .total { margin-top:10px; text-align:right; font-size:14px; }
+              @page { size: A4 portrait; margin: 10mm; }
+              * { box-sizing: border-box; }
+              body { font-family: Arial, sans-serif; color:#111; margin:0; font-size:10px; }
+              .logo { width:90px; max-height:52px; object-fit:contain; margin-bottom:4px; }
+              h1 { margin:0 0 10px; font-size:13px; text-align:center; color:#4c1d95; }
+              .meta { width:100%; border-collapse:collapse; margin-bottom:5px; }
+              .meta td { border:0; padding:2px 3px; font-size:9px; }
+              .label { width:22%; font-weight:700; }
+              table { width:100%; border-collapse:collapse; }
+              .vitals { margin:4px 0 7px; table-layout:fixed; }
+              .vitals th, .vitals td { border:1px solid #4c1d95; padding:3px 2px; text-align:center; }
+              .vitals th, .route thead th { background:#5b21b6; color:#fff; font-weight:700; }
+              .route { table-layout:fixed; font-size:9px; }
+              .route th, .route td { border:1px solid #4c1d95; padding:3px 4px; }
+              .route th:first-child, .route td:first-child { width:58%; }
+              .route th:last-child, .route td:last-child { width:42%; }
+              .area-title td { background:#ede9fe; color:#3b0764; font-weight:700; }
+              .exam-row td { height:22px; vertical-align:top; }
             </style>
           </head>
           <body>
-            <h1>Hoja de Ruta de Examenes Ocupacionales</h1>
-            <div class="meta">
-              <div><strong>Orden:</strong> ${det.codigo} | <strong>Fecha:</strong> ${det.fecha_orden} | <strong>Estado:</strong> ${det.estado}</div>
-              <div><strong>Empresa:</strong> ${det.empresa}</div>
-              <div><strong>Documento:</strong> ${det.documento_numero} | <strong>Puesto:</strong> ${det.puesto_trabajo}</div>
-              <div><strong>Protocolo:</strong> ${det.protocolo_descripcion} | <strong>Tipo:</strong> ${det.tipo_codigo} - ${det.tipo_nombre}</div>
-            </div>
-            <table>
+            ${logoUrl ? `<img class="logo" src="${escapeRouteHtml(logoUrl)}" alt="Logo">` : ""}
+            <h1>${escapeRouteHtml(protocoloEmpresa)}</h1>
+            <table class="meta">
+              <tr><td class="label">APELLIDOS Y NOMBRES:</td><td colspan="3"><strong>${escapeRouteHtml(String(det.paciente_nombre_completo || "").toUpperCase())}</strong></td></tr>
+              <tr><td class="label">CARGO:</td><td><strong>${escapeRouteHtml(String(det.puesto_trabajo || "").toUpperCase())}</strong></td><td class="label">AREA:</td><td><strong>${escapeRouteHtml(String(det.area_trabajo || "").toUpperCase())}</strong></td></tr>
+              <tr><td class="label">FECHA:</td><td><strong>${escapeRouteHtml(formatRouteDate(det.fecha_orden))}</strong></td><td class="label">TIPO DE EVALUACION:</td><td><strong>${escapeRouteHtml(String(det.tipo_nombre || det.tipo_codigo || "").toUpperCase())}</strong></td></tr>
+              <tr><td class="label">EDAD:</td><td><strong>${escapeRouteHtml(det.paciente_edad ?? "")}</strong></td><td class="label">ORDEN:</td><td><strong>${escapeRouteHtml(det.codigo)}</strong></td></tr>
+            </table>
+            <table class="vitals"><thead><tr>${vitalsHead}</tr></thead><tbody><tr>${vitalsValues}</tr></tbody></table>
+            <table class="route">
               <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Codigo</th>
-                  <th>Examen</th>
-                  <th style="text-align:right;">Monto</th>
-                </tr>
+                <tr><th>AREAS</th><th>CONTROL</th></tr>
               </thead>
               <tbody>${rowsHtml}</tbody>
             </table>
-            <div class="total"><strong>Total: S/ ${det.monto_total}</strong></div>
           </body>
         </html>
       `);
       win.document.close();
-      win.focus();
-      win.print();
+      const triggerPrint = () => {
+        win.focus();
+        win.print();
+      };
+      if (win.document.readyState === "complete") {
+        win.setTimeout(triggerPrint, logoUrl ? 350 : 100);
+      } else {
+        win.onload = triggerPrint;
+      }
     } catch (err) {
       setError(err.message || "No se pudo imprimir la orden");
     }
@@ -2047,41 +2173,101 @@ export default function OrdenesOcupacionalesPage() {
     setError("");
     setMessage("");
     try {
-      const det = await obtenerDetalleOrdenOcupacional(ordenId);
-      const jsPDF = (await import("jspdf")).default;
-      const autoTable = (await import("jspdf-autotable")).default;
+      const [det, configuracionClinica, jsPDFModule, autoTableModule] = await Promise.all([
+        obtenerDetalleOrdenOcupacional(ordenId),
+        fetchConfiguracionClinica(),
+        import("jspdf"),
+        import("jspdf-autotable"),
+      ]);
+      const jsPDF = jsPDFModule.default;
+      const autoTable = autoTableModule.default;
+      const routeGroups = buildRouteGroups(det.items);
+      const vitals = buildRouteVitals(det);
+      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_ocupacional_url || configuracionClinica?.logo_url || "");
+      const logoRaw = logoUrl ? await loadImageAsDataUrl(logoUrl).catch(() => "") : "";
+      const logoDataUrl = logoRaw ? await cropImageWhitespaceDataUrl(logoRaw).catch(() => logoRaw) : "";
 
-      const doc = new jsPDF();
-      doc.setFontSize(14);
-      doc.text("Hoja de Ruta de Examenes Ocupacionales", 14, 14);
-      doc.setFontSize(10);
-      doc.text(`Orden: ${det.codigo}    Fecha: ${det.fecha_orden}    Estado: ${det.estado}`, 14, 22);
-      doc.text(`Empresa: ${det.empresa}`, 14, 28);
-      doc.text(`Documento: ${det.documento_numero}    Puesto: ${det.puesto_trabajo}`, 14, 34);
-      doc.text(`Protocolo: ${det.protocolo_descripcion}`, 14, 40);
-      doc.text(`Tipo: ${det.tipo_codigo} - ${det.tipo_nombre}`, 14, 46);
+      const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      if (logoDataUrl) {
+        const logoProps = doc.getImageProperties(logoDataUrl);
+        const ratio = logoProps.width / logoProps.height;
+        const logoWidth = Math.min(30, 18 * ratio);
+        const logoHeight = logoWidth / ratio;
+        doc.addImage(logoDataUrl, inferDataUrlImageFormat(logoDataUrl), 14, 8, logoWidth, logoHeight);
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.setTextColor(76, 29, 149);
+      doc.text(
+        `${String(det.protocolo_descripcion || "PROTOCOLO").toUpperCase()} - ${String(det.empresa || "").toUpperCase()}`,
+        105,
+        17,
+        { align: "center", maxWidth: 145 }
+      );
+      doc.setTextColor(15, 23, 42);
 
       autoTable(doc, {
-        startY: 52,
-        head: [["#", "Codigo", "Examen", "Monto"]],
-        body: (det.items || []).map((it, idx) => [
-          String(idx + 1),
-          String(it.examen_codigo || ""),
-          String(it.examen_descripcion || ""),
-          `S/ ${it.monto || "0.00"}`,
-        ]),
-        styles: { fontSize: 9 },
-        headStyles: { fillColor: [15, 23, 42] },
-        columnStyles: { 3: { halign: "right" } },
+        startY: 25,
+        theme: "plain",
+        body: [
+          ["APELLIDOS Y NOMBRES:", String(det.paciente_nombre_completo || "").toUpperCase()],
+          ["CARGO:", String(det.puesto_trabajo || "").toUpperCase()],
+          ["AREA:", String(det.area_trabajo || "").toUpperCase()],
+          ["FECHA:", formatRouteDate(det.fecha_orden)],
+          ["TIPO DE EVALUACION:", String(det.tipo_nombre || det.tipo_codigo || "").toUpperCase()],
+          ["EDAD:", String(det.paciente_edad ?? "")],
+        ],
+        styles: { fontSize: 7.5, cellPadding: 0.7, textColor: [15, 23, 42] },
+        columnStyles: {
+          0: { cellWidth: 36, fontStyle: "bold" },
+          1: { cellWidth: 144 },
+        },
+        margin: { left: 15, right: 15 },
       });
 
-      const yFinal = (doc.lastAutoTable?.finalY || 52) + 8;
-      doc.setFontSize(11);
-      doc.text(`Total: S/ ${det.monto_total || "0.00"}`, 14, yFinal);
+      autoTable(doc, {
+        startY: (doc.lastAutoTable?.finalY || 25) + 2,
+        head: [vitals.map((item) => item.label)],
+        body: [vitals.map((item) => String(item.value || ""))],
+        theme: "grid",
+        styles: { fontSize: 7, cellPadding: 1, halign: "center", lineColor: [76, 29, 149], lineWidth: 0.2 },
+        headStyles: { fillColor: [91, 33, 182], textColor: [255, 255, 255], fontStyle: "bold" },
+        margin: { left: 15, right: 15 },
+      });
+
+      const routeBody = [];
+      routeGroups.forEach((group) => {
+        routeBody.push([
+          { content: group.title, styles: { fontStyle: "bold", fillColor: [237, 233, 254], textColor: [59, 7, 100] } },
+          { content: "", styles: { fillColor: [237, 233, 254] } },
+        ]);
+        group.items.forEach((item) => {
+          routeBody.push([String(item.examen_descripcion || ""), ""]);
+        });
+      });
+
+      autoTable(doc, {
+        startY: (doc.lastAutoTable?.finalY || 45) + 3,
+        head: [["AREAS", "CONTROL"]],
+        body: routeBody,
+        theme: "grid",
+        styles: {
+          fontSize: 7.3,
+          cellPadding: 1.2,
+          minCellHeight: 6.5,
+          valign: "middle",
+          lineColor: [76, 29, 149],
+          lineWidth: 0.2,
+        },
+        headStyles: { fillColor: [91, 33, 182], textColor: [255, 255, 255], fontStyle: "bold", halign: "center" },
+        columnStyles: { 0: { cellWidth: 105 }, 1: { cellWidth: 75 } },
+        margin: { left: 15, right: 15, bottom: 12 },
+        rowPageBreak: "avoid",
+      });
 
       const safeCode = String(det.codigo || `orden_${ordenId}`).replace(/[^A-Za-z0-9_-]/g, "_");
-      doc.save(`orden_ocupacional_${safeCode}.pdf`);
-      setMessage(`PDF generado: ${safeCode}`);
+      doc.save(`hoja_ruta_${safeCode}.pdf`);
+      setMessage(`Hoja de ruta generada: ${safeCode}`);
     } catch (err) {
       setError(err.message || "No se pudo generar PDF de la orden");
     } finally {

@@ -163,6 +163,22 @@ function resolve_extra_columns_orden($conn)
     return $cols;
 }
 
+function resolve_extra_columns_detalle_orden($conn)
+{
+    $cols = [
+        'grupo_snapshot' => false,
+        'subgrupo_snapshot' => false,
+        'grupo_orden_snapshot' => false,
+        'examen_orden_snapshot' => false,
+    ];
+
+    foreach ($cols as $name => $_) {
+        $cols[$name] = column_exists_orden($conn, 'ocupacional_orden_detalle', $name);
+    }
+
+    return $cols;
+}
+
 function normalize_text_orden($value)
 {
     return strtoupper(trim((string)$value));
@@ -449,22 +465,33 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
     $edadPaciente = calculate_age_orden($paciente['fecha_nacimiento'] ?? '');
     $puestoTrabajador = normalize_text_orden($trabajador['puesto_trabajo'] ?? '');
 
+    $hasGrupoMaster = table_exists_orden($mysqliOcup, 'ocupacional_grupos_examenes');
+    $grupoOrdenSelect = $hasGrupoMaster ? 'COALESCE(g.orden, 0)' : '0';
+    $grupoJoin = $hasGrupoMaster
+        ? ' LEFT JOIN ocupacional_grupos_examenes g ON g.parent_id = 0 AND UPPER(g.nombre) = UPPER(e.grupo)'
+        : '';
+
         $stmtRows = $mysqliOcup->prepare('SELECT
                                                                                 c.id AS catalogo_id,
                                                                                 c.examen_id,
                                                                                 e.codigo,
                                                                                 e.descripcion,
+                                                                                e.grupo,
+                                                                                e.subgrupo,
+                                                                                ' . $grupoOrdenSelect . ' AS grupo_orden,
+                                                                                COALESCE(e.posicion, 0) AS examen_orden,
                                                                                 pd.monto AS monto,
                                                                                 1 AS tiene_config_protocolo
                                                                             FROM ocupacional_catalogo_empresas c
                                                                             INNER JOIN ocupacional_examenes_generales e ON e.id = c.examen_id
+                                                                            ' . $grupoJoin . '
                                                                             INNER JOIN ocupacional_protocolo_detalle pd ON pd.catalogo_id = c.id
                                                                                                                                                              AND pd.protocolo_id = ?
                                                                                                                                                              AND pd.tipo_evaluacion_id = ?
                                                                             WHERE c.empresa_id = ?
                                                                                 AND c.estado = "activo"
                                                                                 AND e.estado = "activo"
-                                                                            ORDER BY e.grupo ASC, e.subgrupo ASC, e.descripcion ASC, e.id DESC');
+                                                                            ORDER BY grupo_orden ASC, e.grupo ASC, e.subgrupo ASC, examen_orden ASC, e.descripcion ASC, e.id DESC');
     if (!$stmtRows) {
         out_orden(500, ['success' => false, 'error' => 'No se pudo consultar detalle del protocolo']);
     }
@@ -482,6 +509,10 @@ function resolve_examenes_orden($mysqliOcup, $mysqliCore, $empresaId, $trabajado
             'examen_id' => (int)$row['examen_id'],
             'codigo' => (string)$row['codigo'],
             'descripcion' => (string)$row['descripcion'],
+            'grupo' => (string)($row['grupo'] ?? ''),
+            'subgrupo' => (string)($row['subgrupo'] ?? ''),
+            'grupo_orden' => (int)($row['grupo_orden'] ?? 0),
+            'examen_orden' => (int)($row['examen_orden'] ?? 0),
             'monto' => number_format((float)$row['monto'], 2, '.', ''),
             'tiene_config_protocolo' => (int)($row['tiene_config_protocolo'] ?? 0) === 1,
             'aplica' => false,
@@ -621,6 +652,7 @@ foreach ($requiredTables as $table) {
 }
 
 $ordenExtraColumns = resolve_extra_columns_orden($mysqliOcup);
+$detalleExtraColumns = resolve_extra_columns_detalle_orden($mysqliOcup);
 $medicoSnapshotColumns = [
     'medico_responsable_id',
     'medico_nombre_snapshot',
@@ -1218,6 +1250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                                             t.external_patient_id,
                                             t.documento_numero,
                                             t.puesto_trabajo,
+                                            t.area_riesgo,
                                             p.descripcion AS protocolo_descripcion,
                                             te.codigo AS tipo_codigo,
                                             te.nombre AS tipo_nombre
@@ -1279,12 +1312,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             }
         }
 
+        $hasGrupoMasterDetalle = table_exists_orden($mysqliOcup, 'ocupacional_grupos_examenes');
+        $grupoDetalleExpr = !empty($detalleExtraColumns['grupo_snapshot'])
+            ? 'COALESCE(NULLIF(d.grupo_snapshot, ""), e.grupo, "")'
+            : 'COALESCE(e.grupo, "")';
+        $subgrupoDetalleExpr = !empty($detalleExtraColumns['subgrupo_snapshot'])
+            ? 'COALESCE(NULLIF(d.subgrupo_snapshot, ""), e.subgrupo, "")'
+            : 'COALESCE(e.subgrupo, "")';
+        $grupoOrdenDetalleExpr = !empty($detalleExtraColumns['grupo_orden_snapshot'])
+            ? 'CASE WHEN d.grupo_orden_snapshot > 0 THEN d.grupo_orden_snapshot ELSE ' . ($hasGrupoMasterDetalle ? 'COALESCE(g.orden, 0)' : '0') . ' END'
+            : ($hasGrupoMasterDetalle ? 'COALESCE(g.orden, 0)' : '0');
+        $examenOrdenDetalleExpr = !empty($detalleExtraColumns['examen_orden_snapshot'])
+            ? 'CASE WHEN d.examen_orden_snapshot > 0 THEN d.examen_orden_snapshot ELSE COALESCE(e.posicion, 0) END'
+            : 'COALESCE(e.posicion, 0)';
+        $grupoDetalleJoin = $hasGrupoMasterDetalle
+            ? ' LEFT JOIN ocupacional_grupos_examenes g ON g.parent_id = 0 AND UPPER(g.nombre) = UPPER(COALESCE(NULLIF(' . (!empty($detalleExtraColumns['grupo_snapshot']) ? 'd.grupo_snapshot' : '""') . ', ""), e.grupo, ""))'
+            : '';
+
                 $stmtDet = $mysqliOcup->prepare('SELECT
                                                                                         d.id,
                                                                                         d.catalogo_id,
                                                                                         d.examen_id,
                                                                                         d.examen_codigo,
                                                                                         d.examen_descripcion,
+                                                                                        ' . $grupoDetalleExpr . ' AS examen_grupo,
+                                                                                        ' . $subgrupoDetalleExpr . ' AS examen_subgrupo,
+                                                                                        ' . $grupoOrdenDetalleExpr . ' AS grupo_orden,
+                                                                                        ' . $examenOrdenDetalleExpr . ' AS examen_orden,
                                                                                         d.monto,
                                                                                         d.estado_ejecucion,
                                                                                         d.observacion_ejecucion,
@@ -1296,8 +1350,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                                                                                                     AND rc.estado = "finalizado"
                                                                                         ) AS resultado_finalizado
                                                                                  FROM ocupacional_orden_detalle d
+                                                                                 LEFT JOIN ocupacional_examenes_generales e ON e.id = d.examen_id
+                                                                                 ' . $grupoDetalleJoin . '
                                                                                  WHERE d.orden_id = ?
-                                                                                 ORDER BY d.id ASC');
+                                                                                 ORDER BY grupo_orden ASC, examen_grupo ASC, examen_subgrupo ASC, examen_orden ASC, d.id ASC');
         if (!$stmtDet) {
             out_orden(500, ['success' => false, 'error' => 'No se pudo consultar detalle de orden']);
         }
@@ -1313,6 +1369,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'examen_id' => (int)$d['examen_id'],
                 'examen_codigo' => (string)($d['examen_codigo'] ?? ''),
                 'examen_descripcion' => (string)($d['examen_descripcion'] ?? ''),
+                'examen_grupo' => (string)($d['examen_grupo'] ?? ''),
+                'examen_subgrupo' => (string)($d['examen_subgrupo'] ?? ''),
+                'grupo_orden' => (int)($d['grupo_orden'] ?? 0),
+                'examen_orden' => (int)($d['examen_orden'] ?? 0),
                 'monto' => number_format((float)($d['monto'] ?? 0), 2, '.', ''),
                 'estado_ejecucion' => (string)($d['estado_ejecucion'] ?? 'pendiente'),
                 'observacion_ejecucion' => (string)($d['observacion_ejecucion'] ?? ''),
@@ -1321,6 +1381,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             ];
         }
         $stmtDet->close();
+
+        $triajeResumen = [];
+        if (table_exists_orden($mysqliOcup, 'ocupacional_resultados_clinicos')) {
+            $stmtTriaje = $mysqliOcup->prepare('SELECT rc.datos_json
+                                                FROM ocupacional_resultados_clinicos rc
+                                                INNER JOIN ocupacional_orden_detalle d ON d.id = rc.orden_detalle_id
+                                                LEFT JOIN ocupacional_examenes_generales e ON e.id = d.examen_id
+                                                WHERE d.orden_id = ?
+                                                  AND rc.estado = "finalizado"
+                                                  AND (LOWER(d.examen_descripcion) LIKE "%triaje%"
+                                                       OR LOWER(d.examen_descripcion) LIKE "%triage%"
+                                                       OR LOWER(COALESCE(e.grupo, "")) LIKE "%triaje%")
+                                                ORDER BY rc.updated_at DESC, rc.id DESC
+                                                LIMIT 1');
+            if ($stmtTriaje) {
+                $stmtTriaje->bind_param('i', $ordenId);
+                $stmtTriaje->execute();
+                $rowTriaje = $stmtTriaje->get_result()->fetch_assoc();
+                $stmtTriaje->close();
+                if ($rowTriaje && trim((string)($rowTriaje['datos_json'] ?? '')) !== '') {
+                    $decodedTriaje = json_decode((string)$rowTriaje['datos_json'], true);
+                    $triajeResumen = is_array($decodedTriaje) ? $decodedTriaje : [];
+                }
+            }
+        }
 
         $totalItems = count($detalles);
         $totalCompletados = 0;
@@ -1399,12 +1484,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'paciente_edad' => $pacienteEdad,
                 'documento_numero' => (string)($cab['documento_numero'] ?? ''),
                 'puesto_trabajo' => (string)($cab['puesto_trabajo'] ?? ''),
+                'area_trabajo' => (string)($cab['area_riesgo'] ?? ''),
                 'protocolo_descripcion' => (string)($cab['protocolo_descripcion'] ?? ''),
                 'tipo_codigo' => (string)($cab['tipo_codigo'] ?? ''),
                 'tipo_nombre' => (string)($cab['tipo_nombre'] ?? ''),
                 'total_items' => $totalItems,
                 'total_completados' => $totalCompletados,
                 'items' => $detalles,
+                'triaje' => $triajeResumen,
                 'eventos' => $eventos,
             ],
         ]);
@@ -1669,9 +1756,18 @@ if ($accion === 'registrar_orden') {
         $stmtCode->execute();
         $stmtCode->close();
 
-        $stmtDet = $mysqliOcup->prepare('INSERT INTO ocupacional_orden_detalle
-                                         (orden_id, catalogo_id, examen_id, examen_codigo, examen_descripcion, monto)
-                                         VALUES (?, ?, ?, ?, ?, ?)');
+        $detalleSnapshotReady = !empty($detalleExtraColumns['grupo_snapshot'])
+            && !empty($detalleExtraColumns['subgrupo_snapshot'])
+            && !empty($detalleExtraColumns['grupo_orden_snapshot'])
+            && !empty($detalleExtraColumns['examen_orden_snapshot']);
+        $sqlDetalle = $detalleSnapshotReady
+            ? 'INSERT INTO ocupacional_orden_detalle
+               (orden_id, catalogo_id, examen_id, examen_codigo, examen_descripcion, grupo_snapshot, subgrupo_snapshot, grupo_orden_snapshot, examen_orden_snapshot, monto)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            : 'INSERT INTO ocupacional_orden_detalle
+               (orden_id, catalogo_id, examen_id, examen_codigo, examen_descripcion, monto)
+               VALUES (?, ?, ?, ?, ?, ?)';
+        $stmtDet = $mysqliOcup->prepare($sqlDetalle);
         if (!$stmtDet) {
             throw new Exception('No se pudo preparar insercion de detalle');
         }
@@ -1681,8 +1777,16 @@ if ($accion === 'registrar_orden') {
             $examenId = (int)$item['examen_id'];
             $codigoEx = (string)$item['codigo'];
             $descEx = (string)$item['descripcion'];
+            $grupoEx = (string)($item['grupo'] ?? '');
+            $subgrupoEx = (string)($item['subgrupo'] ?? '');
+            $grupoOrdenEx = (int)($item['grupo_orden'] ?? 0);
+            $examenOrdenEx = (int)($item['examen_orden'] ?? 0);
             $monto = (float)$item['monto'];
-            $stmtDet->bind_param('iiissd', $ordenId, $catalogoId, $examenId, $codigoEx, $descEx, $monto);
+            if ($detalleSnapshotReady) {
+                $stmtDet->bind_param('iiissssiid', $ordenId, $catalogoId, $examenId, $codigoEx, $descEx, $grupoEx, $subgrupoEx, $grupoOrdenEx, $examenOrdenEx, $monto);
+            } else {
+                $stmtDet->bind_param('iiissd', $ordenId, $catalogoId, $examenId, $codigoEx, $descEx, $monto);
+            }
             $stmtDet->execute();
         }
         $stmtDet->close();

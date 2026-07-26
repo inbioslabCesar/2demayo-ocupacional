@@ -24,6 +24,13 @@ Si 0024 y 0023 ya fueron ejecutados, para habilitar el RNA opcional del medico a
 
 Los dos scripts son incrementales, admiten segunda ejecucion y no modifican los registros existentes.
 
+Para habilitar los snapshots de clasificacion y orden de la hoja de ruta en una instalacion que ya tiene 0023-0026, ejecutar despues:
+
+1. En la base ocupacional: `20260725_0027_ocupacional_hoja_ruta_snapshots.sql`.
+2. En la misma base: `20260726_0028_ocupacional_triaje_catalogo.sql`.
+
+Los scripts son incrementales e idempotentes. Las ordenes antiguas usan como fallback la clasificacion vigente del catalogo; las nuevas congelan grupo, subgrupo y posiciones al registrarse. La migracion 0028 instala el grupo `TRIAJE`, su subgrupo `Signos vitales` y el examen `TRI_0001`, pero su habilitacion y monto se configuran por empresa, protocolo y tipo de evaluacion desde la matriz.
+
 ### Desarrollo o instalacion historica incremental
 
 1. Seleccionar previamente la base de datos destino en la herramienta/cliente SQL.

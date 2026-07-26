@@ -147,3 +147,14 @@ Ejecutar en este orden:
 2. `migraciones/20260725_0026_ocupacional_medico_rna_snapshot.sql` en la base ocupacional.
 
 Postflight esperado en ambos casos: `total = 1`. Los medicos y ordenes existentes mantienen RNA vacio; las nuevas aptitudes congelan el RNA disponible en el snapshot de la orden.
+
+## 11. Actualizacion incremental de hoja de ruta
+
+Si los paquetes acumulativos y las migraciones RNA ya fueron aplicados, ejecutar solamente:
+
+1. `migraciones/20260725_0027_ocupacional_hoja_ruta_snapshots.sql` en la base ocupacional.
+2. `migraciones/20260726_0028_ocupacional_triaje_catalogo.sql` en la misma base ocupacional.
+
+El postflight de 0027 debe listar las cuatro columnas `grupo_snapshot`, `subgrupo_snapshot`, `grupo_orden_snapshot` y `examen_orden_snapshot`. El postflight de 0028 debe mostrar el grupo `TRIAJE`, el subgrupo `Signos vitales` y el examen `TRI_0001` activos. Ambos scripts admiten segunda ejecucion y no alteran detalles historicos.
+
+La migracion 0028 no agrega Triaje automaticamente a protocolos existentes porque el monto `0.00` representa exclusion. Despues de ejecutarla, habilitar el examen para la empresa y asignarle un monto positivo en cada combinacion protocolo/tipo de evaluacion donde deba aplicarse.
