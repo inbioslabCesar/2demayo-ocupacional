@@ -330,6 +330,65 @@ function normalize_text_orden($value)
     return strtoupper(trim((string)$value));
 }
 
+function normalize_aptitud_enum_orden($value)
+{
+    $raw = trim((string)$value);
+    if ($raw === '') {
+        return '';
+    }
+
+    $normalized = strtoupper(preg_replace('/\s+/', ' ', str_replace('_', ' ', $raw)));
+    $normalized = strtr($normalized, [
+        'Á' => 'A',
+        'É' => 'E',
+        'Í' => 'I',
+        'Ó' => 'O',
+        'Ú' => 'U',
+        'Ñ' => 'N',
+    ]);
+
+    if ($normalized === 'APTO CON RESTRICCION' || $normalized === 'APTO CON RESTRICCIONES') {
+        return 'APTO_CON_RESTRICCIONES';
+    }
+
+    if ($normalized === 'NO APTO' || $normalized === 'NOAPTO') {
+        return 'NO_APTO';
+    }
+
+    if (in_array($normalized, [
+        'OBSERVADO',
+        'NO CONCLUIDO',
+        'EN PROCESO',
+        'COVID POSITIVO',
+        'COVID ANTIGENA POSITIVO',
+        'EXAMEN COMPLEMENTARIO HCG BETA POSITIVO',
+        'PRUEBA ANTIGENA COVID-19 POSITIVO',
+    ], true)) {
+        return 'NO_APTO';
+    }
+
+    if (in_array($normalized, [
+        'APTO',
+        'SANO',
+        'CONCLUIDO - NORMAL',
+        'EXAMEN COMPLEMENTARIO CONCLUIDO',
+        'EXAMEN DE RETIRO CONCLUIDO',
+        'COVID NEGATIVO',
+        'COVID ANTIGENA NEGATIVO',
+        'EXAMEN COMPLEMENTARIO HCG BETA NEGATIVO',
+        'PRUEBA ANTIGENA COVID-19 NEGATIVO',
+        'PRUEBA RAPIDA SEROLOGICA COVID-19 IGG/IGM NO REACTIVO',
+    ], true)) {
+        return 'APTO';
+    }
+
+    if (in_array($normalized, ['APTO', 'APTO CON RESTRICCION', 'APTO CON RESTRICCIONES', 'NO APTO'], true)) {
+        return $normalized === 'APTO' ? 'APTO' : ($normalized === 'NO APTO' ? 'NO_APTO' : 'APTO_CON_RESTRICCIONES');
+    }
+
+    return '';
+}
+
 function require_medico_responsable_orden($mysqliCore, $medicoId)
 {
     $id = (int)$medicoId;
@@ -2410,24 +2469,23 @@ if ($accion === 'guardar_aptitud_orden') {
     require_ocup_permiso_any_orden(['cerrar_ordenes_ocupacional', 'emitir_certificados_ocupacional']);
     $ordenId = (int)($payload['id'] ?? 0);
     $aptitudFinal = trim((string)($payload['aptitud_final'] ?? ''));
+    $aptitudFinalPersist = normalize_aptitud_enum_orden($aptitudFinal);
     $restriccionFinal = trim((string)($payload['restriccion_final'] ?? ''));
     $recomendacionFinal = trim((string)($payload['recomendacion_final'] ?? ''));
     $medicoResponsableId = (int)($payload['medico_responsable_id'] ?? 0);
-    $aptitudesValidas = ['APTO', 'APTO_CON_RESTRICCIONES', 'NO_APTO'];
 
-    if ($ordenId <= 0 || !in_array($aptitudFinal, $aptitudesValidas, true)) {
-        out_orden(422, ['success' => false, 'error' => 'id y aptitud_final valida son obligatorios']);
+    if ($ordenId <= 0 || $aptitudFinal === '') {
+        out_orden(422, ['success' => false, 'error' => 'id y aptitud_final son obligatorios']);
+    }
+    if ($aptitudFinalPersist === '') {
+        out_orden(422, ['success' => false, 'error' => 'La aptitud seleccionada no es compatible con el certificado ocupacional']);
     }
     require_owner_medico_by_orden_id_orden($mysqliOcup, $ordenId, $ordenExtraColumns, 'orden');
     if (!$medicoSnapshotReady) {
         out_orden(500, ['success' => false, 'error' => 'Falta aplicar migracion 20260725_0020 de medico responsable']);
     }
-    $medicoResponsable = require_medico_responsable_orden($mysqli, $medicoResponsableId);
-    if ($aptitudFinal === 'APTO_CON_RESTRICCIONES' && $restriccionFinal === '') {
-        out_orden(422, ['success' => false, 'error' => 'Debe registrar restricciones para la aptitud seleccionada']);
-    }
 
-    $stmt = $mysqliOcup->prepare('SELECT id, estado FROM ocupacional_ordenes WHERE id = ? LIMIT 1');
+    $stmt = $mysqliOcup->prepare('SELECT id, estado, medico_responsable_id FROM ocupacional_ordenes WHERE id = ? LIMIT 1');
     if (!$stmt) {
         out_orden(500, ['success' => false, 'error' => 'No se pudo validar orden']);
     }
@@ -2439,10 +2497,20 @@ if ($accion === 'guardar_aptitud_orden') {
     if (!$orden) {
         out_orden(404, ['success' => false, 'error' => 'Orden no encontrada']);
     }
-    if (!in_array((string)$orden['estado'], ['completada', 'cerrada'], true)) {
-        out_orden(422, ['success' => false, 'error' => 'La aptitud final solo puede guardarse en una orden completada o cerrada']);
+    if ((string)$orden['estado'] === 'anulada') {
+        out_orden(422, ['success' => false, 'error' => 'No se puede guardar aptitud en una orden anulada']);
     }
-    $resumenClinico = require_orden_clinicamente_finalizada($mysqliOcup, $ordenId);
+
+    if ($aptitudFinalPersist === 'APTO_CON_RESTRICCIONES' && $restriccionFinal === '') {
+        out_orden(422, ['success' => false, 'error' => 'Debe registrar restricciones para la aptitud seleccionada']);
+    }
+
+    $medicoResponsableIdResolved = $medicoResponsableId > 0
+        ? $medicoResponsableId
+        : (int)($orden['medico_responsable_id'] ?? 0);
+    $medicoResponsable = require_medico_responsable_orden($mysqli, $medicoResponsableIdResolved);
+
+    $resumenClinico = ['total' => 0, 'finalizados' => 0];
     $cerradaAlGuardarAptitud = (string)$orden['estado'] === 'completada';
 
     $stmtUp = $mysqliOcup->prepare('UPDATE ocupacional_ordenes
@@ -2468,7 +2536,7 @@ if ($accion === 'guardar_aptitud_orden') {
     }
     $stmtUp->bind_param(
         'ssssissssssiii',
-        $aptitudFinal,
+        $aptitudFinalPersist,
         $restriccionFinal,
         $recomendacionFinal,
         $medicoResponsable['nombre'],
@@ -2494,6 +2562,7 @@ if ($accion === 'guardar_aptitud_orden') {
         $usuarioId,
         [
             'aptitud_final' => $aptitudFinal,
+            'aptitud_final_persistida' => $aptitudFinalPersist,
             'restriccion_final' => $restriccionFinal,
             'recomendacion_final' => $recomendacionFinal,
             'medico_responsable_id' => $medicoResponsable['id'],
@@ -2519,12 +2588,15 @@ if ($accion === 'guardar_aptitud_orden') {
         );
     }
 
+    $estadoResultante = $cerradaAlGuardarAptitud ? 'cerrada' : (string)$orden['estado'];
+
     out_orden(200, [
         'success' => true,
         'data' => [
             'id' => $ordenId,
             'aptitud_final' => $aptitudFinal,
-            'estado' => 'cerrada',
+            'aptitud_final_persistida' => $aptitudFinalPersist,
+            'estado' => $estadoResultante,
             'cerrada_al_guardar_aptitud' => $cerradaAlGuardarAptitud,
         ],
     ]);
@@ -2559,8 +2631,8 @@ if ($accion === 'registrar_emision_certificado_orden') {
     if (!$orden) {
         out_orden(404, ['success' => false, 'error' => 'Orden no encontrada']);
     }
-    if ((string)$orden['estado'] !== 'cerrada') {
-        out_orden(422, ['success' => false, 'error' => 'El certificado solo puede emitirse para orden cerrada']);
+    if ((string)$orden['estado'] === 'anulada') {
+        out_orden(422, ['success' => false, 'error' => 'No se puede emitir certificado para una orden anulada']);
     }
     if (trim((string)($orden['aptitud_final'] ?? '')) === '') {
         out_orden(422, ['success' => false, 'error' => 'Debe registrar aptitud final antes de emitir certificado']);
@@ -2571,11 +2643,11 @@ if ($accion === 'registrar_emision_certificado_orden') {
         || trim((string)($orden['medico_firma_snapshot'] ?? '')) === '') {
         out_orden(422, ['success' => false, 'error' => 'Debe registrar un medico responsable con CMP y firma antes de emitir certificado']);
     }
-    if ((string)$orden['aptitud_final'] === 'APTO_CON_RESTRICCIONES'
+    $aptitudFinalNormalizada = strtoupper(preg_replace('/\s+/', ' ', str_replace('_', ' ', (string)($orden['aptitud_final'] ?? ''))));
+    if (in_array($aptitudFinalNormalizada, ['APTO CON RESTRICCION', 'APTO CON RESTRICCIONES'], true)
         && trim((string)($orden['restriccion_final'] ?? '')) === '') {
         out_orden(422, ['success' => false, 'error' => 'Debe registrar las restricciones antes de emitir certificado']);
     }
-    require_orden_clinicamente_finalizada($mysqliOcup, $ordenId);
 
     registrar_evento_orden(
         $mysqliOcup,

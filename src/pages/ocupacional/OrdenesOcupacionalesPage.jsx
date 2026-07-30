@@ -55,6 +55,60 @@ const APTITUD_LABELS = {
   NO_APTO: "No apto",
 };
 
+const LEGACY_APTITUD_OPTIONS = [
+  "APTO",
+  "NO APTO",
+  "OBSERVADO",
+  "APTO CON RESTRICCION",
+  "SANO",
+  "EXAMEN COMPLEMENTARIO HCG BETA POSITIVO",
+  "EXAMEN COMPLEMENTARIO HCG BETA NEGATIVO",
+  "PRUEBA ANTIGENA COVID-19 NEGATIVO",
+  "PRUEBA ANTIGENA COVID-19 POSITIVO",
+  "EXAMEN DE RETIRO CONCLUIDO",
+  "CONCLUIDO - NORMAL",
+  "EXAMEN COMPLEMENTARIO CONCLUIDO",
+  "EN PROCESO",
+  "NO CONCLUIDO",
+  "PRUEBA RÁPIDA SEROLÓGICA COVID-19 IGG/IGM NO REACTIVO",
+  "PRUEBA RÁPIDA SEROLÓGICA COVID-19 IGM REACTIVO",
+  "PRUEBA RÁPIDA SEROLÓGICA COVID-19 IGG/IGM REACTIVO",
+  "PRUEBA RÁPIDA SEROLÓGICA COVID-19 IGG REACTIVO",
+  "APTO_CON_RESTRICCIONES",
+  "NO_APTO",
+];
+
+function normalizeAptitudKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const base = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s+/g, "_");
+  if (base === "APTO_CON_RESTRICCION") return "APTO_CON_RESTRICCIONES";
+  if (base === "NOAPTO") return "NO_APTO";
+  return base;
+}
+
+function esAptitudConRestriccion(value) {
+  return normalizeAptitudKey(value) === "APTO_CON_RESTRICCIONES";
+}
+
+function formatAptitudLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Pendiente";
+  return APTITUD_LABELS[raw] || APTITUD_LABELS[normalizeAptitudKey(raw)] || raw;
+}
+
+function aptitudBadgeClass(value) {
+  const key = normalizeAptitudKey(value);
+  if (key === "APTO") return "bg-emerald-100 text-emerald-700";
+  if (key === "APTO_CON_RESTRICCIONES") return "bg-amber-100 text-amber-800";
+  if (key === "NO_APTO") return "bg-red-100 text-red-700";
+  return "bg-slate-100 text-slate-600";
+}
+
 function resumenLevantamientoOrden(row) {
   const total = Number(row?.interconsultas_levantadas || 0);
   const noFavorables = Number(row?.levantamientos_no_favorables || 0);
@@ -72,11 +126,8 @@ function textoObservacionesOrden(row) {
 }
 
 function ordenListaParaAptitud(row) {
-  if (!row || !["completada", "cerrada"].includes(String(row.estado || ""))) return false;
-  if (Number(row.total_items || 0) <= 0) return false;
-  return Number(row.total_completados || 0) === Number(row.total_items || 0)
-    && Number(row.total_observados || 0) === 0
-    && Number(row.interconsultas_abiertas || 0) === 0;
+  if (!row) return false;
+  return String(row.estado || "") !== "anulada";
 }
 
 function ActionIconButton({ icon: _Icon, label, disabled = false, active = false, badge = 0, onClick }) {
@@ -588,6 +639,7 @@ export default function OrdenesOcupacionalesPage() {
   const [cerrandoId, setCerrandoId] = useState(0);
   const [pdfId, setPdfId] = useState(0);
   const [detalleModalOpen, setDetalleModalOpen] = useState(false);
+  const [detalleModalVista, setDetalleModalVista] = useState("full");
   const [detalleModalLoading, setDetalleModalLoading] = useState(false);
   const [detalleModalData, setDetalleModalData] = useState(null);
   const [detalleModalError, setDetalleModalError] = useState("");
@@ -954,7 +1006,8 @@ export default function OrdenesOcupacionalesPage() {
     }
   };
 
-  const onVerDetalle = async (ordenId) => {
+  const onVerDetalle = async (ordenId, vista = "full") => {
+    setDetalleModalVista(vista === "aptitud" ? "aptitud" : "full");
     setDetalleModalOpen(true);
     setDetalleModalLoading(true);
     setDetalleModalError("");
@@ -1610,11 +1663,7 @@ export default function OrdenesOcupacionalesPage() {
       setDetalleModalError("Seleccione aptitud final");
       return;
     }
-    if (Number(aptitudForm.medicoId || 0) <= 0) {
-      setDetalleModalError("Seleccione el medico responsable");
-      return;
-    }
-    if (aptitudForm.aptitud === "APTO_CON_RESTRICCIONES" && !String(aptitudForm.restriccion || "").trim()) {
+    if (esAptitudConRestriccion(aptitudForm.aptitud) && !String(aptitudForm.restriccion || "").trim()) {
       setDetalleModalError("Ingrese las restricciones para la aptitud seleccionada");
       return;
     }
@@ -1634,8 +1683,8 @@ export default function OrdenesOcupacionalesPage() {
       await recargarListadoYResumen();
       setMessage(
         aptitudGuardada?.cerrada_al_guardar_aptitud
-          ? `Aptitud final guardada y orden cerrada: ${aptitudForm.aptitud}`
-          : `Aptitud final guardada: ${aptitudForm.aptitud}`
+          ? `Aptitud final guardada y orden cerrada: ${formatAptitudLabel(aptitudForm.aptitud)}`
+          : `Aptitud final guardada: ${formatAptitudLabel(aptitudForm.aptitud)}`
       );
     } catch (err) {
       setDetalleModalError(err.message || "No se pudo guardar aptitud final");
@@ -1650,8 +1699,8 @@ export default function OrdenesOcupacionalesPage() {
     setMessage("");
     try {
       const det = await obtenerDetalleOrdenOcupacional(ordenId);
-      if (String(det.estado) !== "cerrada") {
-        throw new Error("El certificado solo se emite para orden cerrada");
+      if (String(det.estado) === "anulada") {
+        throw new Error("No se puede emitir certificado para una orden anulada");
       }
       if (!String(det.aptitud_final || "").trim()) {
         throw new Error("Debe registrar aptitud final antes de emitir certificado");
@@ -1706,7 +1755,7 @@ export default function OrdenesOcupacionalesPage() {
         || ""
       ).trim();
       const tipoCodigo = String(det.tipo_codigo || "").trim().toUpperCase();
-      const aptitud = String(det.aptitud_final || "").trim().toUpperCase();
+      const aptitud = normalizeAptitudKey(det.aptitud_final);
       const fechaEvaluacion = String(det.fecha_orden || "-").split("-").reverse().join("-");
       const sexo = String(det.paciente_sexo || "-").trim().toUpperCase();
       const edad = det.paciente_edad === null || det.paciente_edad === undefined ? "-" : String(det.paciente_edad);
@@ -2436,7 +2485,13 @@ export default function OrdenesOcupacionalesPage() {
   };
 
   const totalPages = Number(meta.total_pages || 0);
-  const aptitudEditable = ["completada", "cerrada"].includes(String(detalleModalData?.estado || ""));
+  const aptitudEditable = Boolean(detalleModalData) && String(detalleModalData?.estado || "") !== "anulada";
+  const aptitudCatalogoModal = useMemo(() => {
+    const uniques = new Set(LEGACY_APTITUD_OPTIONS);
+    const actual = String(aptitudForm.aptitud || "").trim();
+    if (actual) uniques.add(actual);
+    return Array.from(uniques);
+  }, [aptitudForm.aptitud]);
   const totalExamenesDetalle = Number(detalleModalData?.total_items || detalleModalData?.items?.length || 0);
   const examenesFinalizadosDetalle = Number(detalleModalData?.total_completados || 0);
   const examenesObservadosDetalle = (detalleModalData?.items || []).filter((item) => item.estado_ejecucion === "observado").length;
@@ -2814,12 +2869,12 @@ export default function OrdenesOcupacionalesPage() {
                 label={ordenListaParaAptitud(selectedOrder) ? "Aptitud medica" : "Aptitud no disponible: complete resultados, observaciones e interconsultas"}
                 disabled={!ordenListaParaAptitud(selectedOrder)}
                 active={Boolean(selectedOrder?.aptitud_final)}
-                onClick={() => onVerDetalle(selectedOrder.id)}
+                onClick={() => onVerDetalle(selectedOrder.id, "aptitud")}
               />
               <ActionIconButton
                 icon={FiFileText}
                 label={selectedOrder?.certificado_emitido ? "Certificado emitido" : "Certificado con logo"}
-                disabled={!selectedOrder || selectedOrder.estado !== "cerrada" || !String(selectedOrder.aptitud_final || "").trim() || certificandoId === selectedOrder.id}
+                disabled={!selectedOrder || selectedOrder.estado === "anulada" || !String(selectedOrder.aptitud_final || "").trim() || certificandoId === selectedOrder.id}
                 active={Boolean(selectedOrder?.certificado_emitido)}
                 onClick={() => onEmitirCertificado(selectedOrder.id)}
               />
@@ -2919,8 +2974,8 @@ export default function OrdenesOcupacionalesPage() {
                     <p className="mt-1 text-[11px] text-slate-500">{r.codigo} · {Number(r.total_completados || 0)}/{Number(r.total_items || 0)}</p>
                   </td>
                   <td className="px-2 py-3">
-                    <span className={`inline-flex rounded px-2 py-1 text-[11px] font-semibold ${r.aptitud_final === "APTO" ? "bg-emerald-100 text-emerald-700" : r.aptitud_final === "APTO_CON_RESTRICCIONES" ? "bg-amber-100 text-amber-800" : r.aptitud_final === "NO_APTO" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>
-                      {APTITUD_LABELS[r.aptitud_final] || "Pendiente"}
+                    <span className={`inline-flex rounded px-2 py-1 text-[11px] font-semibold ${aptitudBadgeClass(r.aptitud_final)}`}>
+                      {formatAptitudLabel(r.aptitud_final)}
                     </span>
                   </td>
                   <td className="px-2 py-3 leading-5 text-slate-700" title={r.restriccion_final || ""}>{r.restriccion_final || "Sin restricciones"}</td>
@@ -2964,8 +3019,8 @@ export default function OrdenesOcupacionalesPage() {
                   <span className="block truncate text-sm font-semibold text-slate-900">{r.paciente_nombre_completo || "Paciente sin nombre"}</span>
                   <span className="mt-0.5 block text-xs text-slate-500">{r.codigo} · {r.documento_numero || "Sin documento"}</span>
                 </span>
-                <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-semibold ${r.aptitud_final === "APTO" ? "bg-emerald-100 text-emerald-700" : r.aptitud_final === "APTO_CON_RESTRICCIONES" ? "bg-amber-100 text-amber-800" : r.aptitud_final === "NO_APTO" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>
-                  {APTITUD_LABELS[r.aptitud_final] || "Pendiente"}
+                <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-semibold ${aptitudBadgeClass(r.aptitud_final)}`}>
+                  {formatAptitudLabel(r.aptitud_final)}
                 </span>
               </span>
               <span className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
@@ -3011,9 +3066,9 @@ export default function OrdenesOcupacionalesPage() {
 
       {detalleModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3">
-          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white p-4 shadow-xl">
+          <div className={`max-h-[90vh] w-full overflow-y-auto rounded-xl bg-white p-4 shadow-xl ${detalleModalVista === "aptitud" ? "max-w-3xl" : "max-w-5xl"}`}>
             <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-lg font-semibold text-slate-900">Ejecucion de orden</h3>
+              <h3 className="text-lg font-semibold text-slate-900">{detalleModalVista === "aptitud" ? "Aptitud medica" : "Ejecucion de orden"}</h3>
               <button
                 type="button"
                 className="rounded border border-slate-300 px-3 py-1 text-xs"
@@ -3028,88 +3083,90 @@ export default function OrdenesOcupacionalesPage() {
 
             {detalleModalData ? (
               <>
-                <p className="mb-3 text-sm text-slate-700">
-                  Orden: <strong>{detalleModalData.codigo}</strong> | Estado: <strong>{detalleModalData.estado}</strong> | Avance: <strong>{detalleModalData.total_completados || 0}/{detalleModalData.total_items || 0}</strong>
-                </p>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-slate-500">
-                        <th className="py-2 pr-3">Codigo</th>
-                        <th className="py-2 pr-3">Examen</th>
-                        <th className="py-2 pr-3">Estado</th>
-                        <th className="py-2 pr-3">Observacion</th>
-                        <th className="py-2 pr-3">F. ejecucion</th>
-                        <th className="py-2 pr-3">Accion</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(detalleModalData.items || []).map((it) => (
-                        <tr key={it.id} className="border-b last:border-0 align-top">
-                          <td className="py-2 pr-3">{it.examen_codigo}</td>
-                          <td className="py-2 pr-3">{it.examen_descripcion}</td>
-                          <td className="py-2 pr-3">
-                            <select
-                              className="rounded border border-slate-300 px-2 py-1 text-xs"
-                              value={detalleForms[it.id]?.estado || "pendiente"}
-                              onChange={(e) => setDetalleForms((prev) => ({
-                                ...prev,
-                                [it.id]: {
-                                  ...(prev[it.id] || {}),
-                                  estado: e.target.value,
-                                },
-                              }))}
-                              disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
-                            >
-                              <option value="pendiente">pendiente</option>
-                              <option value="en_proceso">en_proceso</option>
-                              <option value="realizado" disabled>realizado (desde formato)</option>
-                              <option value="observado">observado</option>
-                            </select>
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              className="w-56 rounded border border-slate-300 px-2 py-1 text-xs"
-                              value={detalleForms[it.id]?.observacion || ""}
-                              onChange={(e) => setDetalleForms((prev) => ({
-                                ...prev,
-                                [it.id]: {
-                                  ...(prev[it.id] || {}),
-                                  observacion: e.target.value,
-                                },
-                              }))}
-                              placeholder="Observacion"
-                              disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
-                            />
-                          </td>
-                          <td className="py-2 pr-3 text-xs text-slate-600">{it.fecha_ejecucion || "-"}</td>
-                          <td className="py-2 pr-3">
-                            <div className="flex flex-wrap gap-1">
-                              <button
-                                type="button"
-                                className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-                                onClick={() => onAbrirFormatoClinico(it, detalleModalData.id)}
-                                disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
-                              >
-                                Formato
-                              </button>
-                              <button
-                                type="button"
-                                className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
-                                onClick={() => onGuardarDetalle(it.id)}
-                                disabled={savingDetalleId === it.id || detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
-                              >
-                                {savingDetalleId === it.id ? "Guardando..." : "Guardar"}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                {detalleModalVista !== "aptitud" ? (
+                  <>
+                    <p className="mb-3 text-sm text-slate-700">
+                      Orden: <strong>{detalleModalData.codigo}</strong> | Estado: <strong>{detalleModalData.estado}</strong> | Avance: <strong>{detalleModalData.total_completados || 0}/{detalleModalData.total_items || 0}</strong>
+                    </p>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left text-slate-500">
+                            <th className="py-2 pr-3">Codigo</th>
+                            <th className="py-2 pr-3">Examen</th>
+                            <th className="py-2 pr-3">Estado</th>
+                            <th className="py-2 pr-3">Observacion</th>
+                            <th className="py-2 pr-3">F. ejecucion</th>
+                            <th className="py-2 pr-3">Accion</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(detalleModalData.items || []).map((it) => (
+                            <tr key={it.id} className="border-b last:border-0 align-top">
+                              <td className="py-2 pr-3">{it.examen_codigo}</td>
+                              <td className="py-2 pr-3">{it.examen_descripcion}</td>
+                              <td className="py-2 pr-3">
+                                <select
+                                  className="rounded border border-slate-300 px-2 py-1 text-xs"
+                                  value={detalleForms[it.id]?.estado || "pendiente"}
+                                  onChange={(e) => setDetalleForms((prev) => ({
+                                    ...prev,
+                                    [it.id]: {
+                                      ...(prev[it.id] || {}),
+                                      estado: e.target.value,
+                                    },
+                                  }))}
+                                  disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
+                                >
+                                  <option value="pendiente">pendiente</option>
+                                  <option value="en_proceso">en_proceso</option>
+                                  <option value="realizado" disabled>realizado (desde formato)</option>
+                                  <option value="observado">observado</option>
+                                </select>
+                              </td>
+                              <td className="py-2 pr-3">
+                                <input
+                                  className="w-56 rounded border border-slate-300 px-2 py-1 text-xs"
+                                  value={detalleForms[it.id]?.observacion || ""}
+                                  onChange={(e) => setDetalleForms((prev) => ({
+                                    ...prev,
+                                    [it.id]: {
+                                      ...(prev[it.id] || {}),
+                                      observacion: e.target.value,
+                                    },
+                                  }))}
+                                  placeholder="Observacion"
+                                  disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
+                                />
+                              </td>
+                              <td className="py-2 pr-3 text-xs text-slate-600">{it.fecha_ejecucion || "-"}</td>
+                              <td className="py-2 pr-3">
+                                <div className="flex flex-wrap gap-1">
+                                  <button
+                                    type="button"
+                                    className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                    onClick={() => onAbrirFormatoClinico(it, detalleModalData.id)}
+                                    disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
+                                  >
+                                    Formato
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
+                                    onClick={() => onGuardarDetalle(it.id)}
+                                    disabled={savingDetalleId === it.id || detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada" || it.estado_ejecucion === "realizado"}
+                                  >
+                                    {savingDetalleId === it.id ? "Guardando..." : "Guardar"}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
 
-                <section className="mt-4 border-y border-amber-200 bg-amber-50/40 py-3">
+                    <section className="mt-4 border-y border-amber-200 bg-amber-50/40 py-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-3">
                     <h4 className="text-sm font-semibold text-amber-950">Observaciones e interconsultas</h4>
                     <span className="text-xs text-amber-800">
@@ -3305,17 +3362,19 @@ export default function OrdenesOcupacionalesPage() {
                       );
                     })}
                   </div>
-                </section>
+                    </section>
+                  </>
+                ) : null}
 
-                <div className="mt-4 rounded border border-emerald-200 bg-emerald-50/40 p-3">
+                <div className={`${detalleModalVista === "aptitud" ? "mt-0" : "mt-4"} rounded border border-emerald-200 bg-emerald-50/40 p-3`}>
                   <h4 className="mb-2 text-sm font-semibold text-emerald-900">Aptitud final y certificado</h4>
                   {aptitudEditable ? (
                     <p className="mb-3 rounded border border-emerald-200 bg-emerald-100 px-2 py-1.5 text-xs text-emerald-900">
-                      Resultados completos ({examenesFinalizadosDetalle}/{totalExamenesDetalle}). Puede seleccionar o actualizar la aptitud final.
+                      Puede seleccionar o actualizar la aptitud final sin restricciones de avance clinico.
                     </p>
                   ) : (
                     <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                      Aptitud bloqueada: {motivoBloqueoAptitud} Finalice cada formato clinico para habilitarla.
+                      Aptitud bloqueada: la orden se encuentra anulada.
                     </p>
                   )}
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -3329,25 +3388,8 @@ export default function OrdenesOcupacionalesPage() {
                         disabled={!aptitudEditable || savingAptitud}
                       >
                         <option value="">Seleccione...</option>
-                        <option value="APTO">APTO</option>
-                        <option value="APTO_CON_RESTRICCIONES">APTO_CON_RESTRICCIONES</option>
-                        <option value="NO_APTO">NO_APTO</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label htmlFor="medico-responsable-aptitud" className="mb-1 block text-xs text-slate-600">Medico responsable</label>
-                      <select
-                        id="medico-responsable-aptitud"
-                        className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
-                        value={aptitudForm.medicoId}
-                        onChange={(e) => setAptitudForm((prev) => ({ ...prev, medicoId: Number(e.target.value || 0) }))}
-                        disabled={!aptitudEditable || savingAptitud}
-                      >
-                        <option value={0}>Seleccione...</option>
-                        {medicosCrud.map((medico) => (
-                          <option key={medico.id} value={medico.id}>
-                            {formatProfesionalName(medico)} - CMP {medico.cmp || medico.nro_colegiatura}
-                          </option>
+                        {aptitudCatalogoModal.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
                         ))}
                       </select>
                     </div>
@@ -3381,7 +3423,6 @@ export default function OrdenesOcupacionalesPage() {
                         !aptitudEditable
                         || savingAptitud
                         || !aptitudForm.aptitud
-                        || Number(aptitudForm.medicoId || 0) <= 0
                       }
                     >
                       {savingAptitud ? "Guardando..." : (detalleModalData.aptitud_final ? "Actualizar aptitud" : "Guardar aptitud")}
@@ -3390,13 +3431,15 @@ export default function OrdenesOcupacionalesPage() {
                       type="button"
                       className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
                       onClick={() => onEmitirCertificado(detalleModalData.id)}
-                      disabled={certificandoId === detalleModalData.id || detalleModalData.estado !== "cerrada" || !String(detalleModalData.aptitud_final || aptitudForm.aptitud || "").trim()}
+                      disabled={certificandoId === detalleModalData.id || detalleModalData.estado === "anulada" || !String(detalleModalData.aptitud_final || aptitudForm.aptitud || "").trim()}
                     >
                       {certificandoId === detalleModalData.id ? "Emitiendo..." : "Emitir certificado"}
                     </button>
                   </div>
                 </div>
 
+                {detalleModalVista !== "aptitud" ? (
+                  <>
                 <div className="mt-4 rounded border border-cyan-200 bg-cyan-50/40 p-3">
                   <h4 className="mb-2 text-sm font-semibold text-cyan-900">Historia ocupacional</h4>
                   <p className="mb-3 text-xs text-cyan-800">
@@ -3651,6 +3694,8 @@ export default function OrdenesOcupacionalesPage() {
                     )}
                   </div>
                 </div>
+                  </>
+                ) : null}
               </>
             ) : null}
           </div>
