@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FiActivity,
+  FiAlertCircle,
+  FiCheckCircle,
+  FiClipboard,
+  FiEye,
+  FiFileText,
+  FiImage,
+  FiMoreHorizontal,
+  FiPrinter,
+  FiUserCheck,
+  FiXCircle,
+} from "react-icons/fi";
+import {
   listarEmpresasOcupacionales,
   listarProtocolosOcupacionales,
   listarTiposEvaluacionOcupacional,
@@ -32,7 +45,58 @@ import {
   registrarOrdenOcupacional,
 } from "../../api/ocupacionalApi";
 import { BASE_URL } from "../../config/config";
+import FormatoClinicoCampos from "../../components/ocupacional/FormatoClinicoCampos";
 import { formatProfesionalName } from "../../utils/profesionalDisplay";
+
+const APTITUD_LABELS = {
+  APTO: "Apto",
+  APTO_CON_RESTRICCIONES: "Apto con restricciones",
+  NO_APTO: "No apto",
+};
+
+function resumenLevantamientoOrden(row) {
+  const total = Number(row?.interconsultas_levantadas || 0);
+  const noFavorables = Number(row?.levantamientos_no_favorables || 0);
+  if (noFavorables > 0) return `${noFavorables} no favorable${noFavorables === 1 ? "" : "s"}`;
+  if (total > 0) return `${total} favorable${total === 1 ? "" : "s"}`;
+  if (Number(row?.interconsultas_abiertas || 0) > 0) return "Pendiente";
+  return "-";
+}
+
+function textoObservacionesOrden(row) {
+  const clinica = String(row?.observaciones_resumen || "").trim();
+  if (clinica) return clinica;
+  if (Number(row?.total_observados || 0) > 0) return `${row.total_observados} examen(es) observado(s)`;
+  return "Sin observaciones";
+}
+
+function ordenListaParaAptitud(row) {
+  if (!row || !["completada", "cerrada"].includes(String(row.estado || ""))) return false;
+  if (Number(row.total_items || 0) <= 0) return false;
+  return Number(row.total_completados || 0) === Number(row.total_items || 0)
+    && Number(row.total_observados || 0) === 0
+    && Number(row.interconsultas_abiertas || 0) === 0;
+}
+
+function ActionIconButton({ icon: _Icon, label, disabled = false, active = false, badge = 0, onClick }) {
+  return (
+    <button
+      type="button"
+      className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-md border text-lg transition-colors ${active ? "border-violet-500 bg-violet-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700"} disabled:cursor-not-allowed disabled:opacity-35`}
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+    >
+      <_Icon aria-hidden="true" />
+      {Number(badge || 0) > 0 ? (
+        <span className="absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-red-600 px-1 text-center text-[10px] font-bold leading-4 text-white">
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
 
 function resolveAssetUrl(rawValue) {
   const raw = String(rawValue || "").trim();
@@ -383,83 +447,6 @@ function ListaClinicaEditable({ title, singular, value, onChange, disabled }) {
   );
 }
 
-function CampoClinico({ label, value, onChange, type = "text", unit = "", multiline = false, disabled = false }) {
-  return (
-    <label className="block min-w-0 text-xs font-medium text-slate-700">
-      <span className="mb-1 block">{label}</span>
-      <span className="flex items-center rounded border border-slate-300 bg-white focus-within:border-cyan-500 focus-within:ring-1 focus-within:ring-cyan-500">
-        {multiline ? (
-          <textarea className="min-h-20 w-full resize-y rounded border-0 px-2 py-1.5 text-xs outline-none" value={value ?? ""} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
-        ) : (
-          <input type={type} className="min-w-0 flex-1 rounded border-0 px-2 py-1.5 text-xs outline-none" value={value ?? ""} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
-        )}
-        {!multiline && unit ? <span className="shrink-0 pr-2 text-[11px] text-slate-500">{unit}</span> : null}
-      </span>
-    </label>
-  );
-}
-
-function FormatoClinicoCampos({ templateCode, datos, onChange, onAudiometriaChange, onParametroChange, disabled }) {
-  const safeDatos = datos && typeof datos === "object" ? datos : {};
-  const field = (key, label, options = {}) => <CampoClinico key={key} label={label} value={safeDatos[key]} onChange={(value) => onChange(key, value)} disabled={disabled} {...options} />;
-
-  if (templateCode === "triaje_clinico") {
-    return (
-      <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
-        <h4 className="text-sm font-semibold text-slate-800">Signos vitales y antropometria</h4>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {field("presion_sistolica", "Presion sistolica", { type: "number", unit: "mmHg" })}
-          {field("presion_diastolica", "Presion diastolica", { type: "number", unit: "mmHg" })}
-          {field("frecuencia_cardiaca", "Frecuencia cardiaca", { type: "number", unit: "lpm" })}
-          {field("frecuencia_respiratoria", "Frecuencia respiratoria", { type: "number", unit: "rpm" })}
-          {field("temperatura", "Temperatura", { type: "number", unit: "°C" })}
-          {field("saturacion_oxigeno", "Saturacion de oxigeno", { type: "number", unit: "%" })}
-          {field("peso_kg", "Peso", { type: "number", unit: "kg" })}
-          {field("talla_cm", "Talla", { type: "number", unit: "cm" })}
-          {field("perimetro_abdominal_cm", "Perimetro abdominal", { type: "number", unit: "cm" })}
-          <CampoClinico label="IMC" value={safeDatos.imc} onChange={() => {}} unit="kg/m2" disabled />
-        </div>
-        {field("observaciones", "Observaciones", { multiline: true })}
-      </div>
-    );
-  }
-
-  if (templateCode === "audiometria_basica") {
-    const frequencies = ["500", "1000", "2000", "3000", "4000", "6000", "8000"];
-    return (
-      <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
-        <h4 className="text-sm font-semibold text-slate-800">Umbrales audiometricos</h4>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[680px] border-collapse text-xs">
-            <thead><tr><th className="border border-slate-300 bg-slate-100 p-2 text-left">Oido</th>{frequencies.map((frequency) => <th key={frequency} className="border border-slate-300 bg-slate-100 p-2 text-center">{frequency} Hz</th>)}</tr></thead>
-            <tbody>{[["od", "Derecho"], ["oi", "Izquierdo"]].map(([ear, label]) => <tr key={ear}><th className="border border-slate-300 p-2 text-left">{label}</th>{frequencies.map((frequency) => <td key={frequency} className="border border-slate-300 p-1"><input type="number" className="w-full min-w-16 rounded border border-slate-200 px-1 py-1 text-center" value={safeDatos[ear]?.[frequency] ?? ""} onChange={(event) => onAudiometriaChange(ear, frequency, event.target.value)} disabled={disabled} /></td>)}</tr>)}</tbody>
-          </table>
-        </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{field("otoscopia_od", "Otoscopia OD")}{field("otoscopia_oi", "Otoscopia OI")}</div>
-        {field("impresion", "Impresion audiometrica", { multiline: true })}
-        {field("recomendaciones", "Recomendaciones", { multiline: true })}
-      </div>
-    );
-  }
-
-  if (templateCode === "lab_basico") {
-    const parametros = Array.isArray(safeDatos.parametros) ? safeDatos.parametros : [];
-    return <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3"><h4 className="text-sm font-semibold text-slate-800">Resultados de laboratorio</h4><div className="space-y-2">{parametros.map((parametro, index) => <div key={`${parametro.nombre || "parametro"}-${index}`} className="grid grid-cols-1 gap-2 rounded border border-slate-200 bg-white p-2 sm:grid-cols-3"><CampoClinico label="Parametro" value={parametro.nombre} onChange={(value) => onParametroChange(index, "nombre", value)} disabled={disabled} /><CampoClinico label="Valor" value={parametro.valor} onChange={(value) => onParametroChange(index, "valor", value)} disabled={disabled} /><CampoClinico label="Referencia" value={parametro.referencia} onChange={(value) => onParametroChange(index, "referencia", value)} disabled={disabled} /></div>)}</div>{field("hallazgos", "Hallazgos", { multiline: true })}{field("conclusion", "Conclusion", { multiline: true })}{field("recomendaciones", "Recomendaciones", { multiline: true })}</div>;
-  }
-
-  const camposPorTemplate = templateCode === "evaluacion_medica_ocupacional"
-    ? [["motivo_evaluacion", "Motivo de evaluacion"], ["antecedentes_ocupacionales", "Antecedentes ocupacionales"], ["antecedentes_personales", "Antecedentes personales"], ["anamnesis", "Anamnesis"], ["examen_fisico", "Examen fisico"], ["diagnostico", "Diagnostico"], ["conclusion", "Conclusion"], ["recomendaciones", "Recomendaciones"]]
-    : templateCode === "oftalmologia_basica"
-      ? [["agudeza_visual_od", "Agudeza visual OD"], ["agudeza_visual_oi", "Agudeza visual OI"], ["vision_colores", "Vision de colores"], ["impresion", "Impresion oftalmologica"], ["recomendaciones", "Recomendaciones"]]
-      : templateCode === "ekg_basico"
-        ? [["ritmo", "Ritmo"], ["frecuencia", "Frecuencia"], ["eje", "Eje"], ["hallazgos", "Hallazgos"], ["conclusion", "Conclusion"]]
-        : templateCode === "psicologia_basica"
-          ? [["hallazgos", "Hallazgos"], ["diagnostico", "Diagnostico"], ["conclusion", "Conclusion"], ["recomendaciones", "Recomendaciones"]]
-          : [["motivo", "Motivo"], ["hallazgos", "Hallazgos"], ["conclusion", "Conclusion"], ["recomendaciones", "Recomendaciones"]];
-
-  return <div className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-3 md:grid-cols-2">{camposPorTemplate.map(([key, label]) => field(key, label, { multiline: true }))}</div>;
-}
-
 const RESULTADO_PDF_LABELS = {
   motivo: "Motivo",
   motivo_evaluacion: "Motivo de evaluacion",
@@ -579,6 +566,7 @@ export default function OrdenesOcupacionalesPage() {
   const [registrando, setRegistrando] = useState(false);
 
   const [rows, setRows] = useState([]);
+  const [selectedOrderId, setSelectedOrderId] = useState(0);
   const [meta, setMeta] = useState({ page: 1, per_page: 20, total: 0, total_pages: 0 });
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(20);
@@ -644,7 +632,7 @@ export default function OrdenesOcupacionalesPage() {
   const [clinicaLoading, setClinicaLoading] = useState(false);
   const [clinicaError, setClinicaError] = useState("");
   const [formatoModalOpen, setFormatoModalOpen] = useState(false);
-  const [formatoModalLoading, setFormatoModalLoading] = useState(false);
+  const [formatoModalLoading] = useState(false);
   const [formatoModalSaving, setFormatoModalSaving] = useState(false);
   const [formatoPdfGenerating, setFormatoPdfGenerating] = useState(false);
   const [formatoModalError, setFormatoModalError] = useState("");
@@ -665,6 +653,7 @@ export default function OrdenesOcupacionalesPage() {
   const trabajadoresRequestRef = useRef(0);
   const ordenesRequestRef = useRef(0);
   const resumenRequestRef = useRef(0);
+  const deepLinkHandledRef = useRef(false);
   const medicoOrden = useMemo(
     () => (medicosCrud || []).find((m) => Number(m.id) === Number(medicoOrdenId)) || null,
     [medicosCrud, medicoOrdenId]
@@ -813,6 +802,17 @@ export default function OrdenesOcupacionalesPage() {
   useEffect(() => {
     cargarOrdenes();
   }, [cargarOrdenes]);
+
+  useEffect(() => {
+    if (selectedOrderId > 0 && !rows.some((row) => Number(row.id) === Number(selectedOrderId))) {
+      setSelectedOrderId(0);
+    }
+  }, [rows, selectedOrderId]);
+
+  const selectedOrder = useMemo(
+    () => rows.find((row) => Number(row.id) === Number(selectedOrderId)) || null,
+    [rows, selectedOrderId]
+  );
 
   const cargarResumen = useCallback(async () => {
     const requestId = ++resumenRequestRef.current;
@@ -1074,62 +1074,39 @@ export default function OrdenesOcupacionalesPage() {
     }
   };
 
-  const onAbrirFormatoClinico = async (item) => {
-    if (!item?.id) return;
-    setFormatoModalOpen(true);
-    setFormatoModalLoading(true);
-    setFormatoModalSaving(false);
-    setFormatoModalError("");
-    setFormatoModalData(null);
-    setFormatoPlantillaSeleccionada("0");
-    setFormatoPlantillaNombre("");
-    setFormatoPlantillaSaving(false);
-    setFormatoForm({
-      ordenDetalleId: Number(item.id),
-      examenCodigo: String(item.examen_codigo || ""),
-      examenDescripcion: String(item.examen_descripcion || ""),
-      formatoCodigo: String(item.examen_codigo || "formato_general").toLowerCase(),
-      estado: "borrador",
-      observacion: String(item.observacion_ejecucion || ""),
-      datos: {},
-      datosJsonText: "{}",
-    });
+  const onAbrirFormatoClinico = useCallback((item, ordenId = 0) => {
+    const detalleId = Number(item?.id || 0);
+    const resolvedOrdenId = Number(item?.orden_id || ordenId || 0);
+    if (detalleId <= 0 || resolvedOrdenId <= 0) return;
+    window.location.assign(`/salud-ocupacional/evaluacion-medica/${resolvedOrdenId}/examen/${detalleId}`);
+  }, []);
 
+  const onAbrirTriajeOrden = async (row) => {
+    if (!row?.id || Number(row.triaje_detalle_id || 0) <= 0) return;
+    setError("");
     try {
-      const result = await obtenerResultadoClinicoOcupacional({
-        ordenDetalleId: item.id,
-        formatoCodigo: String(item.examen_codigo || "").toLowerCase(),
-      });
-      setFormatoModalData(result);
-      const primerasPlantillas = Array.isArray(result?.plantillasDisponibles) ? result.plantillasDisponibles : [];
-      const plantillaInicial = primerasPlantillas.length > 0 ? String(primerasPlantillas[0].id || 0) : "0";
-      setFormatoPlantillaSeleccionada(plantillaInicial);
-      setFormatoPlantillaNombre(`${String(item.examen_codigo || "examen").toLowerCase()}_plantilla`);
-
-      const detalle = result?.detalle || {};
-      const data = result?.data || null;
-      const plantillaSugerida = result?.plantillaSugerida || {};
-      const hasDataGuardada = !!(data && data.id);
-      const datosJsonInicial = hasDataGuardada
-        ? (data?.datos_json ?? {})
-        : ((plantillaSugerida && Object.keys(plantillaSugerida).length > 0) ? plantillaSugerida : {});
-      const datosJsonText = prettyJsonInput(datosJsonInicial);
-      setFormatoForm({
-        ordenDetalleId: Number(detalle.id || item.id),
-        examenCodigo: String(detalle.examen_codigo || item.examen_codigo || ""),
-        examenDescripcion: String(detalle.examen_descripcion || item.examen_descripcion || ""),
-        formatoCodigo: String(data?.formato_codigo || detalle.formato_codigo || item.examen_codigo || "formato_general").toLowerCase(),
-        estado: String(data?.estado || "borrador"),
-        observacion: String(data?.observacion || item.observacion_ejecucion || ""),
-        datos: datosJsonInicial,
-        datosJsonText,
-      });
+      const detalle = await obtenerDetalleOrdenOcupacional(row.id);
+      const triaje = (detalle?.items || []).find((item) => Number(item.id) === Number(row.triaje_detalle_id));
+      if (!triaje) {
+        throw new Error("No se encontro el examen de Triaje en la orden seleccionada");
+      }
+      onAbrirFormatoClinico(triaje, row.id);
     } catch (err) {
-      setFormatoModalError(err.message || "No se pudo abrir formato clinico");
-    } finally {
-      setFormatoModalLoading(false);
+      setError(err.message || "No se pudo abrir el formato de Triaje");
     }
   };
+
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return undefined;
+    const params = new URLSearchParams(window.location.search);
+    const ordenId = Number(params.get("orden_id") || 0);
+    const detalleId = Number(params.get("detalle_id") || 0);
+    if (params.get("abrir_formato") !== "1" || ordenId <= 0 || detalleId <= 0) return undefined;
+
+    deepLinkHandledRef.current = true;
+    onAbrirFormatoClinico({ id: detalleId }, ordenId);
+    return undefined;
+  }, [onAbrirFormatoClinico]);
 
   const onCargarPlantillaSugeridaFormato = () => {
     const plantilla = formatoModalData?.plantillaSugerida;
@@ -2789,107 +2766,194 @@ export default function OrdenesOcupacionalesPage() {
 
         {loading ? <p className="text-sm text-slate-500">Cargando ordenes...</p> : null}
 
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
+        <section className="mb-3 border-y border-slate-200 bg-slate-50/80 px-3 py-3" aria-label="Acciones de la orden seleccionada">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase text-slate-500">Orden seleccionada</p>
+              {selectedOrder ? (
+                <p className="truncate text-sm font-semibold text-slate-900">
+                  {selectedOrder.codigo} · {selectedOrder.paciente_nombre_completo || "Paciente sin nombre"}
+                </p>
+              ) : (
+                <p className="text-sm text-slate-500">Seleccione una fila para habilitar las acciones.</p>
+              )}
+            </div>
+
+            <div className="flex max-w-full gap-2 overflow-x-auto pb-1" role="toolbar" aria-label="Acciones contextuales">
+              <ActionIconButton
+                icon={FiUserCheck}
+                label={ordenListaParaAptitud(selectedOrder) ? "Aptitud medica" : "Aptitud no disponible: complete resultados, observaciones e interconsultas"}
+                disabled={!ordenListaParaAptitud(selectedOrder)}
+                active={Boolean(selectedOrder?.aptitud_final)}
+                onClick={() => onVerDetalle(selectedOrder.id)}
+              />
+              <ActionIconButton
+                icon={FiFileText}
+                label={selectedOrder?.certificado_emitido ? "Certificado emitido" : "Certificado con logo"}
+                disabled={!selectedOrder || selectedOrder.estado !== "cerrada" || !String(selectedOrder.aptitud_final || "").trim() || certificandoId === selectedOrder.id}
+                active={Boolean(selectedOrder?.certificado_emitido)}
+                onClick={() => onEmitirCertificado(selectedOrder.id)}
+              />
+              <ActionIconButton
+                icon={FiEye}
+                label="Detalle clinico"
+                disabled={!selectedOrder}
+                onClick={() => onVerDetalle(selectedOrder.id)}
+              />
+              <ActionIconButton
+                icon={FiClipboard}
+                label="Hoja de ruta PDF"
+                disabled={!selectedOrder || selectedOrder.estado === "anulada" || pdfId === selectedOrder.id}
+                onClick={() => onDescargarPdf(selectedOrder.id)}
+              />
+              <ActionIconButton
+                icon={FiPrinter}
+                label="Imprimir hoja de ruta"
+                disabled={!selectedOrder || selectedOrder.estado === "anulada"}
+                onClick={() => onImprimir(selectedOrder.id)}
+              />
+              <ActionIconButton
+                icon={FiActivity}
+                label={selectedOrder?.triaje_detalle_id ? "Abrir Triaje" : "El protocolo no incluye Triaje"}
+                disabled={!selectedOrder || Number(selectedOrder.triaje_detalle_id || 0) <= 0 || selectedOrder.estado === "anulada"}
+                active={Boolean(selectedOrder?.triaje_finalizado)}
+                onClick={() => onAbrirTriajeOrden(selectedOrder)}
+              />
+              <ActionIconButton
+                icon={FiAlertCircle}
+                label="Interconsultas"
+                disabled={!selectedOrder}
+                badge={selectedOrder?.interconsultas_abiertas || 0}
+                active={Number(selectedOrder?.interconsultas_levantadas || 0) > 0}
+                onClick={() => onVerDetalle(selectedOrder.id)}
+              />
+              <ActionIconButton icon={FiImage} label="Imagenes: integracion pendiente" disabled />
+              <ActionIconButton
+                icon={FiCheckCircle}
+                label="Cerrar orden"
+                disabled={!selectedOrder || selectedOrder.estado !== "completada" || cerrandoId === selectedOrder.id}
+                onClick={() => onCerrarOrden(selectedOrder)}
+              />
+              <ActionIconButton
+                icon={FiXCircle}
+                label="Anular orden"
+                disabled={!selectedOrder || ["anulada", "completada", "cerrada"].includes(selectedOrder.estado) || anulandoId === selectedOrder.id}
+                onClick={() => onAnular(selectedOrder)}
+              />
+              <ActionIconButton icon={FiMoreHorizontal} label="Mas acciones: proximamente" disabled />
+            </div>
+          </div>
+        </section>
+
+        <div className="hidden overflow-x-auto md:block">
+          <table className="min-w-[1420px] text-xs">
             <thead>
-              <tr className="border-b text-left text-slate-500">
-                <th className="py-2 pr-3">Codigo</th>
-                <th className="py-2 pr-3">Fecha</th>
-                <th className="py-2 pr-3">Estado</th>
-                <th className="py-2 pr-3">Ejecucion</th>
-                <th className="py-2 pr-3">Empresa</th>
-                <th className="py-2 pr-3">Paciente</th>
-                <th className="py-2 pr-3">Documento</th>
-                <th className="py-2 pr-3">Puesto</th>
-                <th className="py-2 pr-3">Protocolo</th>
-                <th className="py-2 pr-3">Tipo</th>
-                <th className="py-2 pr-3">Monto</th>
-                <th className="py-2 pr-3">Acciones</th>
+              <tr className="border-b bg-slate-50 text-left font-semibold uppercase text-slate-500">
+                <th className="w-10 px-2 py-2 text-center">#</th>
+                <th className="min-w-44 px-2 py-2">Empresa</th>
+                <th className="min-w-36 px-2 py-2">Puesto</th>
+                <th className="min-w-52 px-2 py-2">Paciente</th>
+                <th className="min-w-28 px-2 py-2">Tipo / orden</th>
+                <th className="min-w-36 px-2 py-2">Aptitud</th>
+                <th className="min-w-52 px-2 py-2">Restriccion</th>
+                <th className="min-w-60 px-2 py-2">Observaciones</th>
+                <th className="min-w-32 px-2 py-2">Levantamiento</th>
+                <th className="min-w-32 px-2 py-2">Interconsultas</th>
+                <th className="w-20 px-2 py-2 text-center">Imagenes</th>
+                <th className="min-w-24 px-2 py-2">Fecha</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-b last:border-0">
-                  <td className="py-2 pr-3">{r.codigo}</td>
-                  <td className="py-2 pr-3">{r.fecha_orden}</td>
-                  <td className="py-2 pr-3">
-                    <span className={`rounded-full px-2 py-1 text-xs ${r.estado === "anulada" ? "bg-red-100 text-red-700" : r.estado === "cerrada" ? "bg-slate-200 text-slate-700" : r.estado === "completada" ? "bg-blue-100 text-blue-700" : r.estado === "en_proceso" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-                      {r.estado}
+              {rows.map((r, index) => (
+                <tr
+                  key={r.id}
+                  tabIndex={0}
+                  aria-selected={Number(selectedOrderId) === Number(r.id)}
+                  className={`cursor-pointer border-b align-top outline-none transition-colors last:border-0 hover:bg-violet-50 focus:bg-violet-50 ${Number(selectedOrderId) === Number(r.id) ? "bg-violet-100/80 ring-1 ring-inset ring-violet-400" : ""}`}
+                  onClick={() => setSelectedOrderId(Number(r.id))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedOrderId(Number(r.id));
+                    }
+                  }}
+                >
+                  <td className="px-2 py-3 text-center font-semibold text-slate-500">{(page - 1) * perPage + index + 1}</td>
+                  <td className="px-2 py-3 font-medium text-slate-800">{r.empresa || "-"}</td>
+                  <td className="px-2 py-3 text-slate-700">{r.puesto_trabajo || "-"}</td>
+                  <td className="px-2 py-3">
+                    <p className="font-semibold text-slate-800">{r.paciente_nombre_completo || "-"}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{r.documento_numero || "Sin documento"}</p>
+                  </td>
+                  <td className="px-2 py-3">
+                    <p className="font-semibold text-slate-800">{r.tipo_codigo || "-"}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{r.codigo} · {Number(r.total_completados || 0)}/{Number(r.total_items || 0)}</p>
+                  </td>
+                  <td className="px-2 py-3">
+                    <span className={`inline-flex rounded px-2 py-1 text-[11px] font-semibold ${r.aptitud_final === "APTO" ? "bg-emerald-100 text-emerald-700" : r.aptitud_final === "APTO_CON_RESTRICCIONES" ? "bg-amber-100 text-amber-800" : r.aptitud_final === "NO_APTO" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>
+                      {APTITUD_LABELS[r.aptitud_final] || "Pendiente"}
                     </span>
                   </td>
-                  <td className="py-2 pr-3">{Number(r.total_completados || 0)}/{Number(r.total_items || 0)}</td>
-                  <td className="py-2 pr-3">{r.empresa}</td>
-                  <td className="min-w-48 py-2 pr-3 font-medium text-slate-700">{r.paciente_nombre_completo || "-"}</td>
-                  <td className="py-2 pr-3">{r.documento_numero}</td>
-                  <td className="py-2 pr-3">{r.puesto_trabajo}</td>
-                  <td className="py-2 pr-3">{r.protocolo_descripcion}</td>
-                  <td className="py-2 pr-3">{r.tipo_codigo}</td>
-                  <td className="py-2 pr-3">S/ {r.monto_total}</td>
-                  <td className="py-2 pr-3">
-                    <div className="flex flex-wrap gap-1">
-                      <button
-                        type="button"
-                        className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                        onClick={() => onVerDetalle(r.id)}
-                      >
-                        Detalle
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50"
-                        onClick={() => onImprimir(r.id)}
-                      >
-                        Imprimir
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-                        onClick={() => onDescargarPdf(r.id)}
-                        disabled={pdfId === r.id}
-                        title="Descargar hoja de ruta de examenes"
-                      >
-                        {pdfId === r.id ? "Ruta..." : "Hoja ruta"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-                        onClick={() => onEmitirCertificado(r.id)}
-                        disabled={certificandoId === r.id || r.estado !== "cerrada" || !String(r.aptitud_final || "").trim()}
-                      >
-                        {certificandoId === r.id ? "Cert..." : "Certificado"}
-                      </button>
-                      {r.certificado_emitido ? (
-                        <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-1 text-[10px] font-semibold text-emerald-700" title={r.certificado_emitido_at || "Certificado emitido"}>
-                          ✓ Emit.
-                        </span>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="rounded border border-violet-300 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-                        onClick={() => onCerrarOrden(r)}
-                        disabled={cerrandoId === r.id || r.estado !== "completada"}
-                      >
-                        {cerrandoId === r.id ? "Cerrando..." : "Cerrar"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                        onClick={() => onAnular(r)}
-                        disabled={anulandoId === r.id || r.estado === "anulada" || r.estado === "completada" || r.estado === "cerrada"}
-                      >
-                        {anulandoId === r.id ? "Anulando..." : "Anular"}
-                      </button>
-                    </div>
+                  <td className="px-2 py-3 leading-5 text-slate-700" title={r.restriccion_final || ""}>{r.restriccion_final || "Sin restricciones"}</td>
+                  <td className="px-2 py-3 leading-5 text-slate-700" title={textoObservacionesOrden(r)}>{textoObservacionesOrden(r)}</td>
+                  <td className="px-2 py-3">
+                    <span className={Number(r.levantamientos_no_favorables || 0) > 0 ? "font-semibold text-red-700" : Number(r.interconsultas_levantadas || 0) > 0 ? "font-semibold text-emerald-700" : "text-slate-500"}>
+                      {resumenLevantamientoOrden(r)}
+                    </span>
                   </td>
+                  <td className="px-2 py-3">
+                    {Number(r.total_interconsultas || 0) > 0 ? (
+                      <span className={Number(r.interconsultas_abiertas || 0) > 0 ? "font-semibold text-amber-700" : "font-semibold text-emerald-700"}>
+                        {r.interconsultas_abiertas > 0 ? `${r.interconsultas_abiertas} abierta(s)` : `${r.total_interconsultas} cerrada(s)`}
+                      </span>
+                    ) : <span className="text-slate-500">-</span>}
+                  </td>
+                  <td className="px-2 py-3 text-center text-slate-400" title="Integracion ocupacional de imagenes pendiente"><FiImage className="inline text-base" /></td>
+                  <td className="px-2 py-3 text-slate-700">{r.fecha_orden || "-"}</td>
                 </tr>
               ))}
               {!loading && rows.length === 0 ? (
                 <tr>
-                  <td className="py-3 text-slate-500" colSpan={11}>No hay ordenes para mostrar.</td>
+                  <td className="py-3 text-slate-500" colSpan={12}>No hay ordenes para mostrar.</td>
                 </tr>
               ) : null}
             </tbody>
           </table>
+        </div>
+
+        <div className="space-y-2 md:hidden">
+          {rows.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              className={`w-full border px-3 py-3 text-left ${Number(selectedOrderId) === Number(r.id) ? "border-violet-500 bg-violet-50" : "border-slate-200 bg-white"}`}
+              onClick={() => setSelectedOrderId(Number(r.id))}
+              aria-pressed={Number(selectedOrderId) === Number(r.id)}
+            >
+              <span className="flex items-start justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold text-slate-900">{r.paciente_nombre_completo || "Paciente sin nombre"}</span>
+                  <span className="mt-0.5 block text-xs text-slate-500">{r.codigo} · {r.documento_numero || "Sin documento"}</span>
+                </span>
+                <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-semibold ${r.aptitud_final === "APTO" ? "bg-emerald-100 text-emerald-700" : r.aptitud_final === "APTO_CON_RESTRICCIONES" ? "bg-amber-100 text-amber-800" : r.aptitud_final === "NO_APTO" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>
+                  {APTITUD_LABELS[r.aptitud_final] || "Pendiente"}
+                </span>
+              </span>
+              <span className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                <span><strong className="text-slate-500">Empresa:</strong> <span className="text-slate-800">{r.empresa || "-"}</span></span>
+                <span><strong className="text-slate-500">Tipo:</strong> <span className="text-slate-800">{r.tipo_codigo || "-"}</span></span>
+                <span><strong className="text-slate-500">Avance:</strong> <span className="text-slate-800">{Number(r.total_completados || 0)}/{Number(r.total_items || 0)}</span></span>
+                <span><strong className="text-slate-500">Interconsultas:</strong> <span className="text-slate-800">{r.interconsultas_abiertas || 0} abierta(s)</span></span>
+              </span>
+              <span className="mt-3 block border-t border-slate-200 pt-2 text-xs text-slate-700">
+                <strong>Restriccion:</strong> {r.restriccion_final || "Sin restricciones"}
+              </span>
+              <span className="mt-1 block text-xs text-slate-700">
+                <strong>Observaciones:</strong> {textoObservacionesOrden(r)}
+              </span>
+            </button>
+          ))}
+          {!loading && rows.length === 0 ? <p className="py-3 text-sm text-slate-500">No hay ordenes para mostrar.</p> : null}
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-2">
@@ -2995,7 +3059,7 @@ export default function OrdenesOcupacionalesPage() {
                               <button
                                 type="button"
                                 className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-                                onClick={() => onAbrirFormatoClinico(it)}
+                                onClick={() => onAbrirFormatoClinico(it, detalleModalData.id)}
                                 disabled={detalleModalData.estado === "anulada" || detalleModalData.estado === "cerrada"}
                               >
                                 Formato

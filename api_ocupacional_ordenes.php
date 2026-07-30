@@ -825,6 +825,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $total = (int)($stmtCount->get_result()->fetch_assoc()['total'] ?? 0);
         $stmtCount->close();
 
+        $hasInterconsultasListado = table_exists_orden($mysqliOcup, 'ocupacional_interconsultas');
+        $interconsultasSelect = $hasInterconsultasListado
+            ? 'COALESCE(ic.total_interconsultas, 0) AS total_interconsultas,
+                        COALESCE(ic.interconsultas_abiertas, 0) AS interconsultas_abiertas,
+                        COALESCE(ic.interconsultas_respondidas, 0) AS interconsultas_respondidas,
+                        COALESCE(ic.interconsultas_levantadas, 0) AS interconsultas_levantadas,
+                        COALESCE(ic.levantamientos_favorables, 0) AS levantamientos_favorables,
+                        COALESCE(ic.levantamientos_no_favorables, 0) AS levantamientos_no_favorables,'
+            : '0 AS total_interconsultas,
+                        0 AS interconsultas_abiertas,
+                        0 AS interconsultas_respondidas,
+                        0 AS interconsultas_levantadas,
+                        0 AS levantamientos_favorables,
+                        0 AS levantamientos_no_favorables,';
+        $interconsultasJoin = $hasInterconsultasListado
+            ? ' LEFT JOIN (
+                    SELECT
+                        orden_id,
+                        COUNT(*) AS total_interconsultas,
+                        SUM(CASE WHEN estado IN ("solicitada", "respondida") THEN 1 ELSE 0 END) AS interconsultas_abiertas,
+                        SUM(CASE WHEN estado = "respondida" THEN 1 ELSE 0 END) AS interconsultas_respondidas,
+                        SUM(CASE WHEN estado = "levantada" THEN 1 ELSE 0 END) AS interconsultas_levantadas,
+                        SUM(CASE WHEN estado = "levantada" AND resultado_levantamiento = "FAVORABLE" THEN 1 ELSE 0 END) AS levantamientos_favorables,
+                        SUM(CASE WHEN estado = "levantada" AND resultado_levantamiento = "NO_FAVORABLE" THEN 1 ELSE 0 END) AS levantamientos_no_favorables
+                    FROM ocupacional_interconsultas
+                    WHERE estado <> "anulada"
+                    GROUP BY orden_id
+                ) ic ON ic.orden_id = o.id'
+            : '';
+
         $sqlRows = 'SELECT
                         o.id,
                         o.codigo,
@@ -832,6 +862,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         o.estado,
                         o.monto_total,
                         o.aptitud_final,
+                        o.restriccion_final,
+                        o.recomendacion_final,
+                        o.observacion,
                         ' . $sqlExprSubcontrataIdOrden . ' AS subcontrata_empresa_id,
                         ' . $sqlExprFacturarIdOrden . ' AS facturar_empresa_id,
                         ' . $sqlExprFirmaDoctorOrden . ' AS firma_doctor,
@@ -849,6 +882,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         te.codigo AS tipo_codigo,
                         COALESCE(d.total_items, 0) AS total_items,
                         COALESCE(d.total_completados, 0) AS total_completados,
+                        COALESCE(d.total_pendientes, 0) AS total_pendientes,
+                        COALESCE(d.total_en_proceso, 0) AS total_en_proceso,
+                        COALESCE(d.total_observados, 0) AS total_observados,
+                        COALESCE(d.observaciones_resumen, "") AS observaciones_resumen,
+                        COALESCE(d.triaje_detalle_id, 0) AS triaje_detalle_id,
+                        COALESCE(d.triaje_finalizado, 0) AS triaje_finalizado,
+                        ' . $interconsultasSelect . '
                         COALESCE(ce.total_certificados, 0) AS total_certificados,
                         ce.ultimo_certificado_at
                     FROM ocupacional_ordenes o
@@ -870,7 +910,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                                           WHERE rc.orden_detalle_id = od.id
                                             AND rc.estado = "finalizado"
                                       )
-                                     THEN 1 ELSE 0 END) AS total_completados
+                                                                         THEN 1 ELSE 0 END) AS total_completados,
+                                                        SUM(CASE WHEN od.estado_ejecucion = "pendiente" THEN 1 ELSE 0 END) AS total_pendientes,
+                                                        SUM(CASE
+                                                                WHEN od.estado_ejecucion = "en_proceso"
+                                                                    OR (od.estado_ejecucion = "realizado" AND NOT EXISTS (
+                                                                        SELECT 1
+                                                                        FROM ocupacional_resultados_clinicos rp
+                                                                        WHERE rp.orden_detalle_id = od.id
+                                                                            AND rp.estado = "finalizado"
+                                                                    ))
+                                                                THEN 1 ELSE 0
+                                                        END) AS total_en_proceso,
+                                                        SUM(CASE WHEN od.estado_ejecucion = "observado" THEN 1 ELSE 0 END) AS total_observados,
+                                                        GROUP_CONCAT(
+                                                                CASE
+                                                                        WHEN TRIM(COALESCE(od.observacion_ejecucion, "")) <> ""
+                                                                        THEN CONCAT(od.examen_descripcion, ": ", od.observacion_ejecucion)
+                                                                        ELSE NULL
+                                                                END
+                                                                ORDER BY od.id ASC SEPARATOR " | "
+                                                        ) AS observaciones_resumen,
+                                                        MAX(CASE
+                                                                WHEN UPPER(od.examen_codigo) = "TRI_0001"
+                                                                    OR LOWER(od.examen_descripcion) LIKE "%triaje%"
+                                                                    OR LOWER(od.examen_descripcion) LIKE "%triage%"
+                                                                THEN od.id ELSE 0
+                                                        END) AS triaje_detalle_id,
+                                                        MAX(CASE
+                                                                WHEN (UPPER(od.examen_codigo) = "TRI_0001"
+                                                                     OR LOWER(od.examen_descripcion) LIKE "%triaje%"
+                                                                     OR LOWER(od.examen_descripcion) LIKE "%triage%")
+                                                                    AND EXISTS (
+                                                                            SELECT 1
+                                                                            FROM ocupacional_resultados_clinicos tr
+                                                                            WHERE tr.orden_detalle_id = od.id
+                                                                                AND tr.estado = "finalizado"
+                                                                    )
+                                                                THEN 1 ELSE 0
+                                                        END) AS triaje_finalizado
                         FROM ocupacional_orden_detalle od
                         GROUP BY orden_id
                     ) d ON d.orden_id = o.id
@@ -883,6 +961,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         WHERE tipo_evento = "certificado_emitido"
                         GROUP BY orden_id
                     ) ce ON ce.orden_id = o.id'
+                    . $interconsultasJoin
                     . $whereSql
                     . ' ORDER BY o.id DESC LIMIT ? OFFSET ?';
         $stmtRows = $mysqliOcup->prepare($sqlRows);
@@ -906,6 +985,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'estado' => (string)($r['estado'] ?? ''),
                 'monto_total' => number_format((float)($r['monto_total'] ?? 0), 2, '.', ''),
                 'aptitud_final' => (string)($r['aptitud_final'] ?? ''),
+                'restriccion_final' => (string)($r['restriccion_final'] ?? ''),
+                'recomendacion_final' => (string)($r['recomendacion_final'] ?? ''),
+                'observacion_orden' => (string)($r['observacion'] ?? ''),
                 'empresa' => (string)($r['razon_social'] ?? ''),
                 'subcontrata_empresa_id' => isset($r['subcontrata_empresa_id']) ? (int)$r['subcontrata_empresa_id'] : 0,
                 'subcontrata_empresa' => (string)($r['subcontrata_razon_social'] ?? ''),
@@ -923,6 +1005,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'tipo_codigo' => (string)($r['tipo_codigo'] ?? ''),
                 'total_items' => (int)($r['total_items'] ?? 0),
                 'total_completados' => (int)($r['total_completados'] ?? 0),
+                'total_pendientes' => (int)($r['total_pendientes'] ?? 0),
+                'total_en_proceso' => (int)($r['total_en_proceso'] ?? 0),
+                'total_observados' => (int)($r['total_observados'] ?? 0),
+                'observaciones_resumen' => (string)($r['observaciones_resumen'] ?? ''),
+                'triaje_detalle_id' => (int)($r['triaje_detalle_id'] ?? 0),
+                'triaje_finalizado' => (int)($r['triaje_finalizado'] ?? 0) === 1,
+                'total_interconsultas' => (int)($r['total_interconsultas'] ?? 0),
+                'interconsultas_abiertas' => (int)($r['interconsultas_abiertas'] ?? 0),
+                'interconsultas_respondidas' => (int)($r['interconsultas_respondidas'] ?? 0),
+                'interconsultas_levantadas' => (int)($r['interconsultas_levantadas'] ?? 0),
+                'levantamientos_favorables' => (int)($r['levantamientos_favorables'] ?? 0),
+                'levantamientos_no_favorables' => (int)($r['levantamientos_no_favorables'] ?? 0),
                 'certificado_emitido' => ((int)($r['total_certificados'] ?? 0)) > 0,
                 'certificado_emitido_at' => (string)($r['ultimo_certificado_at'] ?? ''),
             ];

@@ -125,7 +125,7 @@ function build_template_codigo_ocup($codigo, $descripcion, $grupo = '', $subgrup
     return 'general_basico';
 }
 
-function build_template_data_ocup($templateCode, $examenCodigo = '', $examenDescripcion = '')
+function build_template_data_ocup($templateCode, $examenCodigo = '', $examenDescripcion = '', $valoresNormales = '')
 {
     switch ($templateCode) {
         case 'triaje_clinico':
@@ -162,11 +162,16 @@ function build_template_data_ocup($templateCode, $examenCodigo = '', $examenDesc
                     ['nombre' => 'leucocitos', 'valor' => '', 'referencia' => ''],
                 ]
                 : [[
+                    'grupo' => '',
                     'nombre' => trim((string)$examenDescripcion) !== '' ? trim((string)$examenDescripcion) : trim((string)$examenCodigo),
                     'valor' => '',
-                    'referencia' => '',
+                    'unidad' => '',
+                    'referencia' => trim((string)$valoresNormales),
                 ]];
             return [
+                'responsable_evaluacion' => '',
+                'tipo_muestra' => '',
+                'condiciones_muestra' => '',
                 'parametros' => $parametros,
                 'hallazgos' => '',
                 'conclusion' => '',
@@ -191,11 +196,28 @@ function build_template_data_ocup($templateCode, $examenCodigo = '', $examenDesc
             ];
         case 'psicologia_basica':
             return [
-                'instrumentos' => [],
+                'responsable_evaluacion' => '',
+                'motivo_evaluacion' => 'EVALUACION MEDICA OCUPACIONAL',
+                'presentacion' => 'adecuada',
+                'postura' => 'erguida',
+                'discurso_ritmo' => 'fluido',
+                'discurso_tono' => 'moderado',
+                'discurso_articulacion' => 'sin_dificultad',
+                'orientacion_tiempo' => 'orientado',
+                'orientacion_espacio' => 'orientado',
+                'orientacion_persona' => 'orientado',
+                'nivel_intelectual' => '',
+                'coordinacion_visomotriz' => '',
+                'nivel_memoria' => '',
+                'personalidad' => '',
+                'afectividad' => '',
+                'conclusion_cognitiva' => '',
+                'conclusion_emocional' => '',
+                'recomendaciones' => '',
+                'observaciones' => '',
                 'hallazgos' => '',
                 'diagnostico' => '',
                 'conclusion' => '',
-                'recomendaciones' => '',
             ];
         case 'ekg_basico':
             return [
@@ -277,6 +299,44 @@ function validate_finalized_data_result_ocup($templateCode, $data)
         require_text_result_ocup($data, 'agudeza_visual_od', 'Agudeza visual OD');
         require_text_result_ocup($data, 'agudeza_visual_oi', 'Agudeza visual OI');
         require_text_result_ocup($data, 'impresion', 'Impresion oftalmologica');
+        return;
+    }
+
+    if ($templateCode === 'lab_basico') {
+        $parametros = isset($data['parametros']) && is_array($data['parametros']) ? $data['parametros'] : [];
+        $parametrosCompletos = 0;
+        foreach ($parametros as $parametro) {
+            if (!is_array($parametro)) {
+                continue;
+            }
+            $nombre = trim((string)($parametro['nombre'] ?? ''));
+            $valor = trim((string)($parametro['valor'] ?? ''));
+            if ($nombre !== '' && $valor !== '') {
+                $parametrosCompletos++;
+            }
+        }
+        if ($parametrosCompletos === 0) {
+            out_result_ocup(422, ['success' => false, 'error' => 'Registre al menos un parametro de laboratorio con nombre y resultado']);
+        }
+        require_text_result_ocup($data, 'conclusion', 'Conclusion de laboratorio');
+        return;
+    }
+
+    if ($templateCode === 'psicologia_basica') {
+        $legacyResult = trim((string)($data['hallazgos'] ?? '')) !== ''
+            && trim((string)($data['conclusion'] ?? '')) !== '';
+        if ($legacyResult) {
+            return;
+        }
+        require_text_result_ocup($data, 'motivo_evaluacion', 'Motivo de evaluacion');
+        require_text_result_ocup($data, 'nivel_intelectual', 'Nivel intelectual');
+        require_text_result_ocup($data, 'coordinacion_visomotriz', 'Coordinacion visomotriz');
+        require_text_result_ocup($data, 'nivel_memoria', 'Nivel de memoria');
+        require_text_result_ocup($data, 'personalidad', 'Personalidad');
+        require_text_result_ocup($data, 'afectividad', 'Afectividad');
+        require_text_result_ocup($data, 'conclusion_cognitiva', 'Conclusion del area cognitiva');
+        require_text_result_ocup($data, 'conclusion_emocional', 'Conclusion del area emocional');
+        require_text_result_ocup($data, 'recomendaciones', 'Recomendaciones');
         return;
     }
 
@@ -582,7 +642,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     $stmtDet = $mysqliOcup->prepare('SELECT d.id, d.orden_id, d.examen_id, d.examen_codigo, d.examen_descripcion,
-                                            eg.grupo AS examen_grupo, eg.subgrupo AS examen_subgrupo,
+                                            eg.grupo AS examen_grupo, eg.subgrupo AS examen_subgrupo, eg.valores_normales,
                                             o.estado AS estado_orden
                                      FROM ocupacional_orden_detalle d
                                      INNER JOIN ocupacional_ordenes o ON o.id = d.orden_id
@@ -610,7 +670,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $templateData = build_template_data_ocup(
         $templateCode,
         $detalle['examen_codigo'] ?? '',
-        $detalle['examen_descripcion'] ?? ''
+        $detalle['examen_descripcion'] ?? '',
+        $detalle['valores_normales'] ?? ''
     );
     $catalog = fetch_template_catalog_result_ocup(
         $mysqliOcup,

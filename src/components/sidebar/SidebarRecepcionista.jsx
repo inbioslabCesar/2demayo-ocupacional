@@ -307,6 +307,16 @@ export default function SidebarRecepcionista({ onClose, usuario }) {
               <span>Ordenes</span>
             </Link>
           )}
+          {can("registrar_trabajadores_ocupacional") && (
+            <Link
+              to="/salud-ocupacional/evaluacion-medica"
+              className="py-2.5 px-3 rounded-lg text-cyan-700 hover:bg-gradient-to-r hover:from-cyan-50 hover:to-emerald-100 font-medium flex items-center gap-3 transition-all duration-300"
+              onClick={onClose}
+            >
+              <Icon iconName="Medical" className="text-lg text-cyan-600" />
+              <span>Evaluación Médica</span>
+            </Link>
+          )}
         </SidebarSection>
       )}
 
