@@ -32,6 +32,19 @@ function normalize_slug_empresa_login($value)
     return trim((string)$text, '_');
 }
 
+function extract_local_part_empresa_login($value)
+{
+    $text = strtolower(trim((string)$value));
+    if ($text === '') {
+        return '';
+    }
+    $atPos = strpos($text, '@');
+    if ($atPos === false) {
+        return $text;
+    }
+    return trim(substr($text, 0, $atPos));
+}
+
 function parse_empresa_login_email($email)
 {
     $email = strtolower(trim((string)$email));
@@ -107,12 +120,29 @@ function find_empresa_legacy_match($mysqliOcup, $localPart)
     $stmt->execute();
     $res = $stmt->get_result();
 
-    $localNorm = normalize_slug_empresa_login($localPart);
+    $localPartRaw = strtolower(trim((string)$localPart));
+    $localNorm = normalize_slug_empresa_login($localPartRaw);
     $found = null;
     while ($row = $res->fetch_assoc()) {
+        $rrhhUsuarioRaw = strtolower(trim((string)($row['rrhh_usuario'] ?? '')));
+        $doctorUsuarioRaw = strtolower(trim((string)($row['doctor_usuario'] ?? '')));
+        $rrhhUsuarioLocal = extract_local_part_empresa_login($rrhhUsuarioRaw);
+        $doctorUsuarioLocal = extract_local_part_empresa_login($doctorUsuarioRaw);
+
+        // Match directo por usuario legacy (correo completo o solo parte local).
+        if (($rrhhUsuarioRaw !== '' && $rrhhUsuarioRaw === $localPartRaw)
+            || ($doctorUsuarioRaw !== '' && $doctorUsuarioRaw === $localPartRaw)
+            || ($rrhhUsuarioLocal !== '' && $rrhhUsuarioLocal === $localPartRaw)
+            || ($doctorUsuarioLocal !== '' && $doctorUsuarioLocal === $localPartRaw)) {
+            $found = $row;
+            break;
+        }
+
         $candidates = [
-            normalize_slug_empresa_login($row['rrhh_usuario'] ?? ''),
-            normalize_slug_empresa_login($row['doctor_usuario'] ?? ''),
+            normalize_slug_empresa_login($rrhhUsuarioRaw),
+            normalize_slug_empresa_login($doctorUsuarioRaw),
+            normalize_slug_empresa_login($rrhhUsuarioLocal),
+            normalize_slug_empresa_login($doctorUsuarioLocal),
             normalize_slug_empresa_login($row['nombre_comercial'] ?? ''),
             normalize_slug_empresa_login($row['razon_social'] ?? ''),
             normalize_slug_empresa_login((string)($row['id'] ?? '')),
@@ -167,7 +197,47 @@ if ($account) {
     }
 
     if (!password_verify($password, (string)($account['password_hash'] ?? ''))) {
-        out_empresa_login(401, ['success' => false, 'error' => 'Credenciales incorrectas']);
+        // Fallback legacy: if hash is stale, validate against empresas_ocupacionales and refresh portal hash.
+        $empresaLegacyFallback = find_empresa_legacy_match($mysqliOcup, (string)$parsedEmail['local']);
+        $legacyFallbackOk = false;
+        if ($empresaLegacyFallback) {
+            $rrhhPassFallback = (string)($empresaLegacyFallback['rrhh_password'] ?? '');
+            $doctorPassFallback = (string)($empresaLegacyFallback['doctor_password'] ?? '');
+            $legacyFallbackOk = ($rrhhPassFallback !== '' && hash_equals($rrhhPassFallback, $password))
+                || ($doctorPassFallback !== '' && hash_equals($doctorPassFallback, $password));
+        }
+
+        if (!$legacyFallbackOk) {
+            out_empresa_login(401, ['success' => false, 'error' => 'Credenciales incorrectas']);
+        }
+
+        $hashFallback = password_hash($password, PASSWORD_DEFAULT);
+        $stmtFix = $mysqliOcup->prepare('UPDATE ocupacional_empresas_portal_usuarios
+                                         SET empresa_id = ?, password_hash = ?, estado = "activo", ultimo_login_at = NOW()
+                                         WHERE id = ? LIMIT 1');
+        if ($stmtFix) {
+            $empresaFallbackId = (int)($empresaLegacyFallback['id'] ?? $account['empresa_id'] ?? 0);
+            $accFallbackId = (int)($account['id'] ?? 0);
+            $stmtFix->bind_param('isi', $empresaFallbackId, $hashFallback, $accFallbackId);
+            $stmtFix->execute();
+            $stmtFix->close();
+        }
+
+        $stmtReloadAcc = $mysqliOcup->prepare('SELECT pu.id, pu.empresa_id, pu.email_login, pu.password_hash, pu.estado, e.ruc, e.razon_social, e.estado AS empresa_estado
+                                               FROM ocupacional_empresas_portal_usuarios pu
+                                               INNER JOIN empresas_ocupacionales e ON e.id = pu.empresa_id
+                                               WHERE pu.id = ?
+                                               LIMIT 1');
+        if ($stmtReloadAcc) {
+            $accFallbackId = (int)($account['id'] ?? 0);
+            $stmtReloadAcc->bind_param('i', $accFallbackId);
+            $stmtReloadAcc->execute();
+            $reloaded = $stmtReloadAcc->get_result()->fetch_assoc();
+            $stmtReloadAcc->close();
+            if ($reloaded) {
+                $account = $reloaded;
+            }
+        }
     }
 
     $stmtTouch = $mysqliOcup->prepare('UPDATE ocupacional_empresas_portal_usuarios SET ultimo_login_at = NOW() WHERE id = ? LIMIT 1');

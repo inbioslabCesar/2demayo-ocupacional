@@ -64,6 +64,31 @@ function applyFavicon(iconHref) {
   link.href = href;
 }
 
+function normalizeEmpresaEmailAlias(rawUsuario) {
+  const raw = String(rawUsuario || "").trim().toLowerCase();
+  if (!raw.includes("@")) {
+    return null;
+  }
+  const parts = raw.split("@");
+  if (parts.length !== 2) {
+    return null;
+  }
+  const local = String(parts[0] || "").trim();
+  const domain = String(parts[1] || "").trim().replace(/\.+$/, "");
+  if (!local || !domain) {
+    return null;
+  }
+  const dominiosEmpresaAlias = new Set([
+    "clinica2demayo.com",
+    "clinica2demayo.co",
+    "clinica2demayo",
+  ]);
+  if (!dominiosEmpresaAlias.has(domain)) {
+    return null;
+  }
+  return `${local}@clinica2demayo.com`;
+}
+
 function Login({ onLogin }) {
   const cachedBrand = readCachedBrand();
   const hasFreshCachedBrand = Boolean(
@@ -242,8 +267,11 @@ function Login({ onLogin }) {
     }
     
     const usuarioTrim = String(usuario || "").trim().toLowerCase();
+    const usuarioEmpresaNormalizado = normalizeEmpresaEmailAlias(usuarioTrim);
+    const usuarioLocalPart = usuarioTrim.includes("@") ? String(usuarioTrim.split("@")[0] || "").trim() : "";
+    const puedeIntentarUsuarioLocal = Boolean(usuarioLocalPart) && usuarioLocalPart !== usuarioTrim;
     const esEmail = usuarioTrim.includes("@") && usuarioTrim.includes(".");
-    const esLoginEmpresa = /@clinica2demayo\.com$/i.test(usuarioTrim);
+    const esLoginEmpresa = Boolean(usuarioEmpresaNormalizado);
     try {
       if (esLoginEmpresa) {
         const resEmpresa = await authFetch("api_login_empresa.php", {
@@ -252,7 +280,7 @@ function Login({ onLogin }) {
             "Content-Type": "application/json",
             "X-Requested-With": "XMLHttpRequest"
           },
-          body: JSON.stringify({ usuario, password }),
+          body: JSON.stringify({ usuario: usuarioEmpresaNormalizado, password }),
         });
         const dataEmpresa = await resEmpresa.json().catch(() => ({}));
         if (resEmpresa.ok && dataEmpresa?.success) {
@@ -278,7 +306,7 @@ function Login({ onLogin }) {
             "Content-Type": "application/json",
             "X-Requested-With": "XMLHttpRequest"
           },
-          body: JSON.stringify({ email: usuario, password }),
+          body: JSON.stringify({ email: usuarioTrim, password }),
         }).then(r => r.json()).catch(() => ({}));
 
         const fetchUsuario = authFetch("api_login.php", {
@@ -287,7 +315,7 @@ function Login({ onLogin }) {
             "Content-Type": "application/json",
             "X-Requested-With": "XMLHttpRequest"
           },
-          body: JSON.stringify({ usuario, password }),
+          body: JSON.stringify({ usuario: usuarioTrim, password }),
         }).then(r => r.json()).catch(() => ({}));
 
         const [dataMedico, dataUsuario] = await Promise.all([fetchMedico, fetchUsuario]);
@@ -319,6 +347,35 @@ function Login({ onLogin }) {
           onLogin && onLogin(usuarioNormalizado);
           navigate(getHomePathByRole(usuarioNormalizado.rol));
           return;
+        }
+
+        if (puedeIntentarUsuarioLocal) {
+          const resUsuarioLocal = await authFetch("api_login.php", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Requested-With": "XMLHttpRequest"
+            },
+            body: JSON.stringify({ usuario: usuarioLocalPart, password }),
+          }).then(r => r.json()).catch(() => ({}));
+
+          if (resUsuarioLocal?.success) {
+            const usuarioNormalizado = {
+              ...resUsuarioLocal.usuario,
+              permisos: normalizePermisos(resUsuarioLocal?.usuario?.permisos || []),
+            };
+            sessionStorage.removeItem('medico');
+            sessionStorage.removeItem('empresa_portal');
+            sessionStorage.setItem('usuario', JSON.stringify(usuarioNormalizado));
+            if (usuarioNormalizado.rol) {
+              sessionStorage.setItem('user_role', usuarioNormalizado.rol);
+            } else {
+              sessionStorage.setItem('user_role', 'recepcionista');
+            }
+            onLogin && onLogin(usuarioNormalizado);
+            navigate(getHomePathByRole(usuarioNormalizado.rol));
+            return;
+          }
         }
       } else {
         // 1. Intentar login como usuario normal
@@ -458,15 +515,17 @@ function Login({ onLogin }) {
                 placeholder="Contraseña"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white/10 border border-white/20 rounded-2xl pl-12 pr-12 py-4 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-blue-400/50 focus:border-transparent backdrop-blur-sm transition-all duration-300"
+                className="w-full bg-white/10 border border-white/20 rounded-2xl pl-12 pr-14 py-4 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-blue-400/50 focus:border-transparent backdrop-blur-sm transition-all duration-300"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-4 flex items-center text-white/60 hover:text-white transition-colors"
+                className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-xl border border-white/35 bg-black/35 text-white shadow-sm transition-all duration-200 hover:bg-black/55 focus:outline-none focus:ring-2 focus:ring-white/70"
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
               >
-                <Icon iconName={showPassword ? "Hide" : "RedEye"} className="text-xl" />
+                <Icon iconName={showPassword ? "Hide" : "RedEye"} className="text-2xl" />
               </button>
             </div>
 
