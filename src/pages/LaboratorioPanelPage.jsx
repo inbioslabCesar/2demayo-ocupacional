@@ -3,12 +3,22 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import OrdenesLaboratorioList from "../laboratorio/OrdenesLaboratorioList";
 import LlenarResultadosForm from "../laboratorio/LlenarResultadosForm";
+import OcupacionalLaboratorioReadOnlyPanel from "../laboratorio/OcupacionalLaboratorioReadOnlyPanel";
 import { authFetch } from "../utils/apiClient";
+
+const TAB_IDS = ["ordenes", "procesar", "ocupacional_lab"];
 
 function LaboratorioPanelPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("ordenes");
+  const searchParams = new URLSearchParams(location.search);
+  const ordenIdContextual = Number(searchParams.get("orden_id") || 0);
+  const modoContextualOcupacional = ordenIdContextual > 0;
+  const tabFromQuery = String(searchParams.get("tab") || "").toLowerCase();
+  const tabInicial = modoContextualOcupacional
+    ? "ocupacional_lab"
+    : (TAB_IDS.includes(tabFromQuery) ? tabFromQuery : "ordenes");
+  const [activeTab, setActiveTab] = useState(tabInicial);
   const [ordenSeleccionada, setOrdenSeleccionada] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
   const deepLinkResolvedRef = useRef(false);
@@ -21,7 +31,57 @@ function LaboratorioPanelPage() {
     vencidas: 0,
   });
   const [deepLinkInfo, setDeepLinkInfo] = useState(null);
-  const backTo = new URLSearchParams(location.search).get('back_to') || '';
+  const backTo = searchParams.get("back_to") || "";
+
+  const setActiveTabPersist = useCallback((nextTab) => {
+    const tab = TAB_IDS.includes(String(nextTab || "")) ? String(nextTab) : "ordenes";
+    setActiveTab(tab);
+
+    const nextParams = new URLSearchParams(location.search);
+    if (tab === "ordenes") {
+      nextParams.delete("tab");
+    } else {
+      nextParams.set("tab", tab);
+    }
+
+    const nextSearch = nextParams.toString();
+    const currentSearch = new URLSearchParams(location.search).toString();
+    if (nextSearch !== currentSearch) {
+      navigate(
+        {
+          pathname: location.pathname,
+          search: nextSearch ? `?${nextSearch}` : "",
+        },
+        { replace: true }
+      );
+    }
+  }, [location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (modoContextualOcupacional && activeTab !== "ocupacional_lab") {
+      setActiveTab("ocupacional_lab");
+    }
+  }, [activeTab, modoContextualOcupacional]);
+
+  useEffect(() => {
+    if (modoContextualOcupacional) return;
+    const currentTabQuery = String(searchParams.get("tab") || "").toLowerCase();
+    if (!TAB_IDS.includes(currentTabQuery)) {
+      if (activeTab !== "ordenes") {
+        setActiveTab("ordenes");
+      }
+      return;
+    }
+    if (currentTabQuery === "procesar" && !ordenSeleccionada) {
+      if (activeTab !== "ordenes") {
+        setActiveTab("ordenes");
+      }
+      return;
+    }
+    if (currentTabQuery !== activeTab) {
+      setActiveTab(currentTabQuery);
+    }
+  }, [activeTab, location.search, modoContextualOcupacional, ordenSeleccionada, searchParams]);
 
   useEffect(() => {
     authFetch("api_examenes_laboratorio.php", {
@@ -72,8 +132,8 @@ function LaboratorioPanelPage() {
     } catch {
       setOrdenSeleccionada(orden);
     }
-    setActiveTab("procesar");
-  }, []);
+    setActiveTabPersist("procesar");
+  }, [setActiveTabPersist]);
 
   useEffect(() => {
     if (deepLinkResolvedRef.current) return;
@@ -110,7 +170,7 @@ function LaboratorioPanelPage() {
           const esCompletada = estadoObjetivo === 'completado';
 
           if (modo === 'ver' && esCompletada) {
-            setActiveTab('ordenes');
+            setActiveTabPersist('ordenes');
             setOrdenSeleccionada(null);
             setDeepLinkInfo({
               tipo: 'completada',
@@ -128,7 +188,7 @@ function LaboratorioPanelPage() {
     };
 
     resolverDesdeDeepLink();
-  }, [location.search, handleSeleccionarOrden]);
+  }, [location.search, handleSeleccionarOrden, setActiveTabPersist]);
 
   const handleVolver = () => {
     if (backTo) {
@@ -137,7 +197,7 @@ function LaboratorioPanelPage() {
     }
     setOrdenSeleccionada(null);
     setReloadKey(k => k + 1);
-    setActiveTab("ordenes");
+    setActiveTabPersist("ordenes");
   };
 
   const handleGuardadoResultados = async (saveResponse) => {
@@ -213,8 +273,19 @@ function LaboratorioPanelPage() {
       icon: "📊",
       color: "from-blue-600 to-cyan-600",
       disabled: !ordenSeleccionada
+    },
+    {
+      id: "ocupacional_lab",
+      label: "Ocupacional Lab",
+      icon: "🧬",
+      color: "from-cyan-700 to-teal-600",
+      disabled: false
     }
   ];
+
+  const tabsVisibles = modoContextualOcupacional
+    ? tabs.filter((tab) => tab.id === "ocupacional_lab")
+    : tabs;
 
   return (
     <div
@@ -266,10 +337,10 @@ function LaboratorioPanelPage() {
           </div>
           {/* Navegación por tabs */}
           <div className="flex gap-1 bg-white/10 backdrop-blur-sm rounded-lg p-1">
-            {tabs.map((tab) => (
+            {tabsVisibles.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => !tab.disabled && setActiveTab(tab.id)}
+                onClick={() => !tab.disabled && setActiveTabPersist(tab.id)}
                 disabled={tab.disabled}
                 className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 text-sm font-medium ${
                   activeTab === tab.id
@@ -362,6 +433,12 @@ function LaboratorioPanelPage() {
             <div className="bg-white/70 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-4">
               <LlenarResultadosForm key={ordenSeleccionada.id} orden={ordenSeleccionada} onVolver={handleVolver} onGuardado={handleGuardadoResultados} />
             </div>
+          </div>
+        )}
+
+        {activeTab === "ocupacional_lab" && (
+          <div className="bg-white/70 backdrop-blur-sm rounded-xl shadow-xl border border-white/20">
+            <OcupacionalLaboratorioReadOnlyPanel />
           </div>
         )}
       </div>

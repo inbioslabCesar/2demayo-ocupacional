@@ -12,6 +12,10 @@ export default function SidebarMedico({ onClose }) {
         <Icon iconName="Contact" className="text-xl" />
         Mis Consultas
       </Link>
+      <Link to="/mis-evaluaciones-ocupacionales" className="py-2 px-3 rounded-lg hover:bg-white/70 font-medium flex items-center gap-2" style={itemStyle} onClick={onClose}>
+        <Icon iconName="ClipboardList" className="text-xl" />
+        Eval. Ocupacionales
+      </Link>
       <Link to="/panel-medico" className="py-2 px-3 rounded-lg hover:bg-white/70 font-medium flex items-center gap-2" style={itemStyle} onClick={onClose}>
         <Icon iconName="Calendar" className="text-xl" />
         Disponibilidad

@@ -398,6 +398,50 @@ export async function listarCatalogoGruposExamenOcupacional() {
   return payload.data || { grupos: [], subgrupos_por_grupo: {} };
 }
 
+export async function listarExamenesLaboratorioOrigenOcupacional({ q = "", page = 1, perPage = 100 } = {}) {
+  const params = new URLSearchParams({
+    accion: "catalogo_laboratorio_origen",
+    q,
+    page: String(page),
+    per_page: String(perPage),
+  });
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return {
+    data: payload.data || [],
+    meta: payload.meta || { page, per_page: perPage, total: 0, total_pages: 0 },
+  };
+}
+
+export async function importarExamenOcupacionalDesdeLaboratorio({
+  laboratorioExamenId,
+  grupoId = 0,
+  subgrupoId = 0,
+  grupo = "LABORATORIO",
+  subgrupo = "",
+  codigo = "",
+  precio = null,
+  posicion = 0,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "importar_desde_laboratorio",
+      laboratorio_examen_id: Number(laboratorioExamenId || 0),
+      grupo_id: Number(grupoId || 0),
+      subgrupo_id: Number(subgrupoId || 0),
+      grupo: String(grupo || ""),
+      subgrupo: String(subgrupo || ""),
+      codigo: String(codigo || "").trim(),
+      precio,
+      posicion: Number(posicion || 0),
+    }),
+  });
+  const payload = await parseJsonWithDetails(response);
+  return payload.data;
+}
+
 export async function guardarGrupoMaestroExamenOcupacional({ nivel, nombre, parentId = 0 } = {}) {
   const response = await fetch(`${BASE_URL}api_ocupacional_examenes.php`, {
     method: "POST",
@@ -1053,6 +1097,32 @@ export async function registrarEmisionPdfResultadoClinicoOcupacional({ ordenDeta
   return await parseJsonOrThrow(response);
 }
 
+export async function resolverFirmantePdfResultadoClinicoOcupacional({ ordenDetalleId, formatoCodigo = "" } = {}) {
+  const params = new URLSearchParams({
+    accion: "resolver_firmante_pdf",
+    orden_detalle_id: String(Number(ordenDetalleId) || 0),
+  });
+  if (String(formatoCodigo || "").trim() !== "") {
+    params.set("formato_codigo", String(formatoCodigo).trim());
+  }
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php?${params.toString()}`);
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
+}
+
+export async function actualizarExamenDetalleOcupacional({ ordenDetalleId } = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_resultados.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "actualizar_examen_detalle",
+      orden_detalle_id: Number(ordenDetalleId) || 0,
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || null;
+}
+
 export async function listarOrdenesOcupacionalesPaginado({
   empresaId = 0,
   estado = "",
@@ -1062,6 +1132,7 @@ export async function listarOrdenesOcupacionalesPaginado({
   q = "",
   page = 1,
   perPage = 20,
+  soloTriaje = false,
 } = {}) {
   const params = new URLSearchParams({
     accion: "listar_ordenes",
@@ -1083,6 +1154,9 @@ export async function listarOrdenesOcupacionalesPaginado({
   }
   if (String(fechaHasta || "").trim() !== "") {
     params.set("fecha_hasta", String(fechaHasta).trim());
+  }
+  if (soloTriaje) {
+    params.set("solo_triaje", "1");
   }
   const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php?${params.toString()}`);
   const payload = await parseJsonOrThrow(response);

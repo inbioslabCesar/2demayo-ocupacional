@@ -20,6 +20,8 @@ import {
 } from "../../api/ocupacionalApi";
 import { APP_BASE_PATH } from "../../config/config";
 
+const ESTADO_EXPANDIDO_STORAGE_KEY = "ocupacional_evaluacion_estado_expandido";
+
 const APTITUD_LABELS = {
   APTO: "Apto",
   APTO_CON_RESTRICCIONES: "Apto con restricciones",
@@ -64,29 +66,40 @@ function estadoClinicoDetalle(item) {
   return "pendiente";
 }
 
-function ConteoSemaforo({ row }) {
-  const total = Number(row?.total_items || 0);
-  const completados = Number(row?.total_completados || 0);
-  const pendientes = Number(row?.total_pendientes || 0);
-  const enProceso = Number(row?.total_en_proceso || 0);
-  const observados = Number(row?.total_observados || 0);
-  const porcentaje = total > 0 ? Math.round((completados / total) * 100) : 0;
+function EstadoClinicoLista({ row, compact = false, expanded = false, onToggle = null }) {
+  const items = Array.isArray(row?.estado_clinico_items) ? row.estado_clinico_items : [];
+  if (items.length === 0) {
+    return <span className="text-xs text-slate-500">Sin exámenes</span>;
+  }
+
+  const maxItemsBase = compact ? 4 : 7;
+  const maxItems = expanded ? items.length : maxItemsBase;
+  const visibles = items.slice(0, maxItems);
+  const restantes = Math.max(0, items.length - maxItemsBase);
+  const puedeAlternar = !compact && restantes > 0 && typeof onToggle === "function";
 
   return (
-    <div className="min-w-[210px] space-y-1.5">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="font-semibold text-slate-800">{completados} de {total} finalizados</span>
-        <span className="tabular-nums text-slate-500">{porcentaje}%</span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-        <div className="h-full bg-emerald-500 transition-[width]" style={{ width: `${porcentaje}%` }} />
-      </div>
-      <div className="flex flex-wrap gap-x-2.5 gap-y-1 text-[10px] font-medium text-slate-600">
-        <span className="inline-flex items-center gap-1" aria-label={`${pendientes} sin atender`}><i className="h-2 w-2 rounded-full bg-red-500" aria-hidden="true" />{pendientes}</span>
-        <span className="inline-flex items-center gap-1" aria-label={`${enProceso} en proceso`}><i className="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />{enProceso}</span>
-        <span className="inline-flex items-center gap-1" aria-label={`${completados} finalizados`}><i className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />{completados}</span>
-        {observados > 0 ? <span className="inline-flex items-center gap-1 font-semibold text-rose-700" aria-label={`${observados} observados`}><FiAlertTriangle aria-hidden="true" />{observados}</span> : null}
-      </div>
+    <div className="min-w-[240px] space-y-1">
+      {visibles.map((item) => {
+        const estado = String(item?.estado || "pendiente");
+        const config = SEMAFORO[estado] || SEMAFORO.pendiente;
+        return (
+          <div key={`${row?.id || 0}-${item?.detalle_id || 0}`} className="flex items-center gap-2 text-[11px] leading-4">
+            <i className={`h-2 w-2 shrink-0 rounded-full ${config.dot}`} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-slate-700" title={item?.examen_descripcion || ""}>{item?.examen_descripcion || "Examen"}</span>
+            <span className="shrink-0 text-[10px] font-semibold text-slate-500">{config.shortLabel}</span>
+          </div>
+        );
+      })}
+      {puedeAlternar ? (
+        <button
+          type="button"
+          className="text-[10px] font-semibold text-cyan-700 hover:text-cyan-800"
+          onClick={onToggle}
+        >
+          {expanded ? "Mostrar menos" : `+${restantes} más`}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -98,6 +111,38 @@ function iconoExamen(item) {
   if (text.includes("triaje") || text.includes("signos") || text.includes("audio")) return <FiActivity aria-hidden="true" />;
   if (text.includes("medic") || text.includes("historia")) return <FiUser aria-hidden="true" />;
   return <FiFileText aria-hidden="true" />;
+}
+
+function examTextLower(item) {
+  return `${item?.examen_codigo || ""} ${item?.examen_descripcion || ""} ${item?.examen_grupo || ""} ${item?.examen_subgrupo || ""}`.toLowerCase();
+}
+
+function isLaboratorioExam(item) {
+  const text = examTextLower(item);
+  return ["laboratorio", "hemograma", "glucosa", "bioquim", "toxico", "inmuno", "serolog", "uroanal", "parasito", "microbio"].some((key) => text.includes(key));
+}
+
+function isPsicologiaExam(item) {
+  const text = examTextLower(item);
+  return ["psico", "epworth", "fobia", "estres"].some((key) => text.includes(key));
+}
+
+function mergeEstadoForGroup(items) {
+  if (!Array.isArray(items) || items.length === 0) return "pendiente";
+  const estados = items.map((it) => estadoClinicoDetalle(it));
+  if (estados.includes("observado")) return "observado";
+  if (estados.every((st) => st === "realizado")) return "realizado";
+  if (estados.some((st) => st === "en_proceso" || st === "realizado")) return "en_proceso";
+  return "pendiente";
+}
+
+function pickTargetExam(items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const firstPending = items.find((it) => {
+    const st = estadoClinicoDetalle(it);
+    return st === "pendiente" || st === "en_proceso";
+  });
+  return firstPending || items[0] || null;
 }
 
 function basePath(path) {
@@ -118,11 +163,36 @@ export default function EvaluacionMedicaOcupacionalPage() {
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(0);
   const [selectedDetail, setSelectedDetail] = useState(null);
+  const [estadoExpandidoPorOrden, setEstadoExpandidoPorOrden] = useState({});
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const requestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const detailCacheRef = useRef(new Map());
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(ESTADO_EXPANDIDO_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        setEstadoExpandidoPorOrden(parsed);
+      }
+    } catch (_) {
+      // Ignore malformed storage and continue with in-memory defaults.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(
+        ESTADO_EXPANDIDO_STORAGE_KEY,
+        JSON.stringify(estadoExpandidoPorOrden || {})
+      );
+    } catch (_) {
+      // Ignore storage write failures (private mode/quota) without breaking UX.
+    }
+  }, [estadoExpandidoPorOrden]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -171,6 +241,65 @@ export default function EvaluacionMedicaOcupacionalPage() {
     [rows, selectedId]
   );
 
+  const examenesCabecera = useMemo(() => {
+    const items = Array.isArray(selectedDetail?.items) ? selectedDetail.items : [];
+    if (items.length === 0) return [];
+
+    const labs = items.filter(isLaboratorioExam);
+    const psico = items.filter(isPsicologiaExam);
+    const used = new Set([...labs, ...psico].map((it) => Number(it?.id || 0)));
+    const otros = items.filter((it) => !used.has(Number(it?.id || 0)));
+
+    const output = [];
+
+    if (labs.length > 0) {
+      const target = pickTargetExam(labs);
+      if (target) {
+        const ordenId = Number(selectedRow?.id || 0);
+        const labPanelHref = ordenId > 0
+          ? basePath(`/panel-laboratorio?orden_id=${ordenId}`)
+          : basePath("/panel-laboratorio");
+        output.push({
+          key: "grupo-lab",
+          item: target,
+          label: "Laboratorio",
+          status: mergeEstadoForGroup(labs),
+          icon: "🧪",
+          total: labs.length,
+          href: labPanelHref,
+        });
+      }
+    }
+
+    if (psico.length > 0) {
+      const target = pickTargetExam(psico);
+      if (target) {
+        output.push({
+          key: "grupo-psico",
+          item: target,
+          label: "Psicología",
+          status: mergeEstadoForGroup(psico),
+          icon: "🧠",
+          total: psico.length,
+        });
+      }
+    }
+
+    otros.forEach((it) => {
+      output.push({
+        key: `detalle-${it.id}`,
+        item: it,
+        label: it.examen_descripcion || it.examen_codigo || "Examen",
+        status: estadoClinicoDetalle(it),
+        icon: null,
+        total: 1,
+        href: null,
+      });
+    });
+
+    return output;
+  }, [selectedDetail]);
+
   const seleccionarOrden = useCallback(async (row) => {
     const orderId = Number(row?.id || 0);
     if (orderId <= 0) return;
@@ -217,6 +346,15 @@ export default function EvaluacionMedicaOcupacionalPage() {
     setFechaDesde("");
     setFechaHasta("");
     setPage(1);
+  };
+
+  const toggleEstadoClinicoExpandido = (ordenId) => {
+    const id = Number(ordenId || 0);
+    if (id <= 0) return;
+    setEstadoExpandidoPorOrden((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
   };
 
   return (
@@ -269,23 +407,28 @@ export default function EvaluacionMedicaOcupacionalPage() {
               {!selectedRow ? <p className="text-sm text-slate-500">Los accesos clínicos aparecerán aquí.</p> : null}
               {detailLoading ? <p className="text-sm text-cyan-700">Cargando protocolo...</p> : null}
               {detailError ? <p className="text-sm text-red-700">{detailError}</p> : null}
-              {(selectedDetail?.items || []).map((item) => {
-                const status = estadoClinicoDetalle(item);
+              {examenesCabecera.map((entry) => {
+                const status = entry.status;
                 const disabled = selectedRow.estado === "anulada";
                 return (
                   <a
-                    key={item.id}
-                    href={disabled ? undefined : urlExamen(item)}
+                    key={entry.key}
+                    href={disabled ? undefined : (entry.href || urlExamen(entry.item))}
                     className={`relative flex h-12 min-w-[150px] max-w-[220px] shrink-0 items-center gap-2 rounded-md border px-3 ${SEMAFORO[status].badge} ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
                     aria-disabled={disabled}
-                    title={`${item.examen_descripcion}: ${SEMAFORO[status].label}`}
-                    aria-label={`Abrir ${item.examen_descripcion}. ${SEMAFORO[status].label}`}
+                    title={`${entry.label}: ${SEMAFORO[status].label}`}
+                    aria-label={`Abrir ${entry.label}. ${SEMAFORO[status].label}`}
                   >
-                    <span className="shrink-0 text-lg">{iconoExamen(item)}</span>
+                    <span className="shrink-0 text-lg">{entry.icon || iconoExamen(entry.item)}</span>
                     <span className="min-w-0 text-left">
-                      <span className="block truncate text-xs font-semibold">{item.examen_descripcion || item.examen_codigo || "Examen"}</span>
+                      <span className="block truncate text-xs font-semibold">{entry.label}</span>
                       <span className="block text-[10px] font-medium opacity-80">{SEMAFORO[status].shortLabel}</span>
                     </span>
+                    {entry.total > 1 ? (
+                      <span className="rounded bg-white/80 px-1.5 py-0.5 text-[10px] font-bold text-slate-700">
+                        {entry.total}
+                      </span>
+                    ) : null}
                     <i className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white ${SEMAFORO[status].dot}`} />
                   </a>
                 );
@@ -337,7 +480,16 @@ export default function EvaluacionMedicaOcupacionalPage() {
                       <td className="px-3 py-3"><span className="font-medium text-slate-800">{APTITUD_LABELS[row.aptitud_final] || row.aptitud_final || "Pendiente"}</span></td>
                       <td className="max-w-48 px-3 py-3 text-slate-700">{row.restriccion_final || "Sin restricciones"}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-slate-700">{row.fecha_orden || "-"}</td>
-                      <td className="px-3 py-3"><ConteoSemaforo row={row} /></td>
+                      <td className="px-3 py-3">
+                        <EstadoClinicoLista
+                          row={row}
+                          expanded={Boolean(estadoExpandidoPorOrden[row.id])}
+                          onToggle={(event) => {
+                            event.stopPropagation();
+                            toggleEstadoClinicoExpandido(row.id);
+                          }}
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -349,7 +501,10 @@ export default function EvaluacionMedicaOcupacionalPage() {
                 <button key={row.id} type="button" className={`w-full px-4 py-4 text-left ${Number(selectedId) === Number(row.id) ? "bg-cyan-50 ring-1 ring-inset ring-cyan-500" : "bg-white"}`} onClick={() => seleccionarOrden(row)} aria-pressed={Number(selectedId) === Number(row.id)}>
                   <div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-900">{row.paciente_nombre_completo || "-"}</p><p className="text-xs text-slate-500">{row.codigo} · {row.documento_numero || "Sin documento"}</p></div><span className="text-xs font-medium text-slate-600">{row.fecha_orden}</span></div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><p><span className="block text-slate-500">Empresa</span>{row.empresa || "-"}</p><p><span className="block text-slate-500">Tipo</span>{row.tipo_codigo || "-"}</p><p><span className="block text-slate-500">Aptitud</span>{APTITUD_LABELS[row.aptitud_final] || row.aptitud_final || "Pendiente"}</p><p><span className="block text-slate-500">Restricción</span>{row.restriccion_final || "Sin restricciones"}</p></div>
-                  <div className="mt-3"><ConteoSemaforo row={row} /></div>
+                  <div className="mt-3">
+                    <p className="mb-1 text-[11px] font-semibold uppercase text-slate-500">Estado clínico</p>
+                    <EstadoClinicoLista row={row} compact />
+                  </div>
                 </button>
               ))}
             </div>

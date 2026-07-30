@@ -3,7 +3,9 @@ import {
   actualizarExamenOcupacional,
   crearExamenOcupacional,
   guardarGrupoMaestroExamenOcupacional,
+  importarExamenOcupacionalDesdeLaboratorio,
   listarCatalogoGruposExamenOcupacional,
+  listarExamenesLaboratorioOrigenOcupacional,
 } from "../../api/ocupacionalApi";
 
 const initialForm = {
@@ -21,6 +23,60 @@ const initialForm = {
 function normalizeNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function repairMojibake(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (!/[ÃÂâ]/.test(text)) return text;
+
+  const map = {
+    "Ã¡": "á",
+    "Ã©": "é",
+    "Ã­": "í",
+    "Ã³": "ó",
+    "Ãº": "ú",
+    "Ã±": "ñ",
+    "Ã": "Á",
+    "Ã‰": "É",
+    "Ã": "Í",
+    "Ã“": "Ó",
+    "Ãš": "Ú",
+    "Ã‘": "Ñ",
+    "â€“": "-",
+    "â€”": "-",
+    "â€œ": '"',
+    "â€": '"',
+    "â€˜": "'",
+    "â€™": "'",
+    "BioquÃ�mica": "Bioquímica",
+    "UroanÃ�lisis": "Uroanálisis",
+    "HematologÃ�a": "Hematología",
+    "InmunologÃ�a": "Inmunología",
+    "QuÃ�mica": "Química",
+    "LipÃ�dico": "Lipídico",
+    "MÃ�S": "MÁS",
+    "Ã�cido": "Ácido",
+    "Ã�rico": "Úrico",
+    "Ã�ricos": "Úricos",
+    "Ãrico": "úrico",
+    "Ãricos": "úricos",
+  };
+
+  let fixed = text;
+  Object.entries(map).forEach(([bad, good]) => {
+    fixed = fixed.split(bad).join(good);
+  });
+  fixed = fixed.replace(/Â/g, "");
+  return fixed;
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 }
 
 function validateForm(form) {
@@ -56,6 +112,15 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState("");
   const [serverMessage, setServerMessage] = useState("");
+  const [labItems, setLabItems] = useState([]);
+  const [labSearch, setLabSearch] = useState("");
+  const [labSelectedId, setLabSelectedId] = useState("");
+  const [labLoading, setLabLoading] = useState(false);
+  const [labImporting, setLabImporting] = useState(false);
+  const [labTotalEncontrado, setLabTotalEncontrado] = useState(0);
+  const [labAutoSeleccionado, setLabAutoSeleccionado] = useState(false);
+
+  const normalizeKey = (value) => normalizeSearchText(repairMojibake(value));
 
   const aplicarCatalogo = (data) => {
     const modo = String(data?.modo || "legacy_texto");
@@ -111,15 +176,67 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
   }, []);
 
   useEffect(() => {
+    let canceled = false;
+    async function cargarLaboratorio() {
+      setLabLoading(true);
+      try {
+        const payload = await listarExamenesLaboratorioOrigenOcupacional({ q: labSearch, page: 1, perPage: 120 });
+        if (canceled) return;
+        const normalized = Array.isArray(payload?.data)
+          ? payload.data.map((item) => ({
+              ...item,
+              nombre: repairMojibake(item?.nombre),
+              categoria: repairMojibake(item?.categoria),
+              metodologia: repairMojibake(item?.metodologia),
+            }))
+          : [];
+        const q = String(labSearch || "").trim();
+        const tokens = normalizeSearchText(q).split(/\s+/).filter(Boolean);
+        const filtered = tokens.length === 0
+          ? normalized
+          : normalized.filter((item) => {
+              const haystack = normalizeSearchText(`${item?.nombre || ""} ${item?.categoria || ""} ${item?.metodologia || ""}`);
+              return tokens.every((tk) => haystack.includes(tk));
+            });
+
+        setLabItems(filtered);
+        setLabTotalEncontrado(tokens.length === 0 ? Number(payload?.meta?.total || normalized.length || 0) : filtered.length);
+
+        if (q !== "" && filtered.length === 1) {
+          setLabSelectedId(String(filtered[0].id));
+          setLabAutoSeleccionado(true);
+        } else {
+          setLabAutoSeleccionado(false);
+          if (!filtered.some((item) => String(item.id) === String(labSelectedId))) {
+            setLabSelectedId("");
+          }
+        }
+      } catch {
+        if (canceled) return;
+        setLabItems([]);
+        setLabTotalEncontrado(0);
+        setLabAutoSeleccionado(false);
+      } finally {
+        if (!canceled) setLabLoading(false);
+      }
+    }
+    const timer = window.setTimeout(cargarLaboratorio, 250);
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [labSearch]);
+
+  useEffect(() => {
     if (editing && typeof editing === "object") {
       setForm({
         codigo: String(editing.codigo || ""),
-        descripcion: String(editing.descripcion || ""),
+        descripcion: repairMojibake(String(editing.descripcion || "")),
         grupo_id: "",
         subgrupo_id: "",
-        grupo: String(editing.grupo || ""),
-        subgrupo: String(editing.subgrupo || ""),
-        valores_normales: String(editing.valores_normales || ""),
+        grupo: repairMojibake(String(editing.grupo || "")),
+        subgrupo: repairMojibake(String(editing.subgrupo || "")),
+        valores_normales: repairMojibake(String(editing.valores_normales || "")),
         precio: String(editing.precio ?? "0"),
         posicion: String(editing.posicion ?? "0"),
       });
@@ -140,7 +257,7 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
     const grupoNombre = String(form.grupo || "").trim();
     if (!grupoNombre || catalogoGrupos.length === 0) return;
 
-    const grupoFound = catalogoGrupos.find((g) => String(g.nombre || "").toUpperCase() === grupoNombre.toUpperCase());
+    const grupoFound = catalogoGrupos.find((g) => normalizeKey(g.nombre) === normalizeKey(grupoNombre));
     if (!grupoFound) return;
 
     if (String(form.grupo_id || "") !== String(grupoFound.id)) {
@@ -150,7 +267,7 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
     const subNombre = String(form.subgrupo || "").trim();
     if (!subNombre) return;
     const subs = Array.isArray(catalogoSubgrupos[String(grupoFound.id)]) ? catalogoSubgrupos[String(grupoFound.id)] : [];
-    const subFound = subs.find((s) => String(s.nombre || "").toUpperCase() === subNombre.toUpperCase());
+    const subFound = subs.find((s) => normalizeKey(s.nombre) === normalizeKey(subNombre));
     if (subFound && String(form.subgrupo_id || "") !== String(subFound.id)) {
       setForm((prev) => ({ ...prev, subgrupo_id: String(subFound.id) }));
     }
@@ -162,8 +279,27 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
     const grupoId = String(form.grupo_id || "").trim();
     if (!grupoId) return [];
     const subs = catalogoSubgrupos[grupoId];
-    return Array.isArray(subs) ? subs : [];
-  }, [form.grupo_id, catalogoSubgrupos]);
+    const normalizados = Array.isArray(subs) ? [...subs] : [];
+
+    const subgrupoActual = String(form.subgrupo || "").trim();
+    if (!subgrupoActual) {
+      return normalizados;
+    }
+
+    const existe = normalizados.some((s) => normalizeKey(s.nombre) === normalizeKey(subgrupoActual));
+    if (!existe) {
+      normalizados.unshift({ id: "__legacy_current__", nombre: subgrupoActual, esLegacy: true });
+    }
+    return normalizados;
+  }, [form.grupo_id, form.subgrupo, catalogoSubgrupos]);
+
+  useEffect(() => {
+    if (!form.grupo_id || !form.subgrupo || form.subgrupo_id) return;
+    const legacy = subgruposSugeridos.find((s) => String(s.id) === "__legacy_current__");
+    if (legacy) {
+      setForm((prev) => ({ ...prev, subgrupo_id: "__legacy_current__" }));
+    }
+  }, [form.grupo_id, form.subgrupo, form.subgrupo_id, subgruposSugeridos]);
 
   const onChangeGrupo = (event) => {
     const grupoId = String(event.target.value || "");
@@ -185,7 +321,7 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
     setForm((prev) => ({
       ...prev,
       subgrupo_id: subId,
-      subgrupo: subObj ? String(subObj.nombre || "") : "",
+      subgrupo: subObj ? repairMojibake(String(subObj.nombre || "")) : "",
     }));
     setServerError("");
     setServerMessage("");
@@ -284,6 +420,47 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
     }
   };
 
+  const handleImportarLaboratorio = async () => {
+    const laboratorioExamenId = Number(labSelectedId || 0);
+    if (laboratorioExamenId <= 0) {
+      setServerError("Seleccione un examen de laboratorio para importar.");
+      return;
+    }
+
+    setLabImporting(true);
+    setServerError("");
+    setServerMessage("");
+    try {
+      const selected = labItems.find((it) => Number(it.id) === laboratorioExamenId);
+      const precio = selected && Number.isFinite(Number(selected.precio_publico)) ? Number(selected.precio_publico) : null;
+      await importarExamenOcupacionalDesdeLaboratorio({
+        laboratorioExamenId,
+        grupoId: Number(form.grupo_id || 0),
+        subgrupoId: Number(form.subgrupo_id || 0),
+        grupo: String(form.grupo || "LABORATORIO").trim() || "LABORATORIO",
+        subgrupo: String(form.subgrupo || "").trim(),
+        codigo: String(form.codigo || "").trim(),
+        precio,
+        posicion: Math.trunc(normalizeNumber(form.posicion || 0)),
+      });
+      setServerMessage("Examen importado desde laboratorio moderno correctamente.");
+      if (typeof onSaved === "function") {
+        onSaved();
+      }
+    } catch (error) {
+      setServerError(error.message || "No se pudo importar el examen desde laboratorio.");
+    } finally {
+      setLabImporting(false);
+    }
+  };
+
+  const examenSeleccionado = useMemo(
+    () => labItems.find((item) => String(item.id) === String(labSelectedId)) || null,
+    [labItems, labSelectedId]
+  );
+
+  const puedeImportarLab = !labLoading && !labImporting && Number(labSelectedId || 0) > 0;
+
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
       <h2 className="text-xl font-semibold text-slate-900">
@@ -292,6 +469,57 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
       <p className="mt-1 text-sm text-slate-600">
         Replica del maestro de examenes ocupacionales del sistema anterior.
       </p>
+
+      <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+        <p className="text-sm font-semibold text-indigo-900">Importar desde laboratorio moderno</p>
+        <p className="mt-1 text-xs text-indigo-700">
+          Usa el catálogo clínico moderno para inyectar parámetros y referencias en el examen ocupacional.
+        </p>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
+          <input
+            className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm"
+            placeholder="Buscar examen de laboratorio"
+            value={labSearch}
+            onChange={(event) => setLabSearch(event.target.value)}
+          />
+          <select
+            className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm"
+            value={labSelectedId}
+            onChange={(event) => setLabSelectedId(event.target.value)}
+            disabled={labLoading || labImporting}
+          >
+            <option value="">Seleccionar examen de laboratorio</option>
+            {labItems.map((item) => (
+              <option key={item.id} value={String(item.id)}>
+                {item.nombre} {item.categoria ? `- ${item.categoria}` : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            onClick={handleImportarLaboratorio}
+            disabled={!puedeImportarLab}
+          >
+            {labImporting ? "Importando..." : (examenSeleccionado ? "Importar examen seleccionado" : "Seleccione un examen")}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-indigo-700">
+          {labLoading
+            ? "Buscando examenes..."
+            : labSearch.trim() === ""
+              ? `Mostrando ${labItems.length} examenes recientes. Escriba para filtrar.`
+              : labItems.length > 0
+                ? `Se encontraron ${labTotalEncontrado} coincidencias para "${labSearch.trim()}".`
+                : `No se encontraron coincidencias para "${labSearch.trim()}". Pruebe con menos palabras (ejemplo: hemogra).`}
+        </p>
+        {examenSeleccionado ? (
+          <p className="mt-1 text-xs text-emerald-700">
+            {labAutoSeleccionado ? "Seleccionado automaticamente:" : "Seleccionado:"} {examenSeleccionado.nombre}
+            {examenSeleccionado.categoria ? ` - ${examenSeleccionado.categoria}` : ""}
+          </p>
+        ) : null}
+      </div>
 
       <form className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
         <div>
@@ -355,7 +583,7 @@ export default function FormExamenOcupacional({ editing, onSaved, onCancel }) {
             >
               <option value="">SELECCIONAR</option>
               {subgruposSugeridos.map((s) => (
-                <option key={s.id} value={s.id}>{s.nombre}</option>
+                <option key={s.id} value={s.id}>{s.esLegacy ? `${s.nombre} (actual)` : s.nombre}</option>
               ))}
             </select>
             <button

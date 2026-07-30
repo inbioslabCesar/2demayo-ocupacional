@@ -24,6 +24,7 @@ import {
   obtenerResultadoClinicoOcupacional,
   guardarResultadoClinicoOcupacional,
   registrarEmisionPdfResultadoClinicoOcupacional,
+  resolverFirmantePdfResultadoClinicoOcupacional,
   guardarPlantillaResultadoClinicoOcupacional,
   eliminarPlantillaResultadoClinicoOcupacional,
   actualizarDetalleOrdenOcupacional,
@@ -1248,13 +1249,17 @@ export default function OrdenesOcupacionalesPage() {
     setFormatoPdfGenerating(true);
     setFormatoModalError("");
     try {
-      const [resultadoPersistido, orden, configuracionClinica, jsPDFModule, autoTableModule] = await Promise.all([
+      const [resultadoPersistido, orden, configuracionClinica, firmantePdfCtx, jsPDFModule, autoTableModule] = await Promise.all([
         obtenerResultadoClinicoOcupacional({
           ordenDetalleId: formatoForm.ordenDetalleId,
           formatoCodigo: formatoForm.formatoCodigo,
         }),
         obtenerDetalleOrdenOcupacional(detalleModalData.id),
         fetchConfiguracionClinica(),
+        resolverFirmantePdfResultadoClinicoOcupacional({
+          ordenDetalleId: formatoForm.ordenDetalleId,
+          formatoCodigo: formatoForm.formatoCodigo,
+        }).catch(() => null),
         import("jspdf"),
         import("jspdf-autotable"),
       ]);
@@ -1268,8 +1273,21 @@ export default function OrdenesOcupacionalesPage() {
       const jsPDF = jsPDFModule.default;
       const autoTable = autoTableModule.default;
       const doc = new jsPDF({ unit: "mm", format: "a4" });
-      const logoUrl = resolveAssetUrl(configuracionClinica?.logo_url || "");
-      const firmaRaw = String(orden.medico_firma_snapshot || "").trim();
+      const areaCode = String(firmantePdfCtx?.area_code || "").trim().toLowerCase();
+      const signer = firmantePdfCtx?.signer && typeof firmantePdfCtx.signer === "object" ? firmantePdfCtx.signer : null;
+      const isLabArea = areaCode === "laboratorio";
+      const logoRaw = String(
+        (firmantePdfCtx?.branding?.logo_url || "")
+        || (isLabArea ? (configuracionClinica?.logo_laboratorio_url || "") : "")
+        || configuracionClinica?.logo_ocupacional_url
+        || configuracionClinica?.logo_url
+        || ""
+      ).trim();
+      const logoUrl = logoRaw ? resolveAssetUrl(logoRaw) : "";
+
+      const firmaRawMedico = String(orden.medico_firma_snapshot || "").trim();
+      const firmaRawLab = String(signer?.firma_data_url || "").trim();
+      const firmaRaw = isLabArea && firmaRawLab ? firmaRawLab : firmaRawMedico;
       const firmaUrl = /^(data:|https?:\/\/|blob:|uploads\/|\/uploads\/)/i.test(firmaRaw) ? resolveAssetUrl(firmaRaw) : "";
       const [logoDataUrl, firmaDataUrl] = await Promise.all([
         logoUrl ? loadImageAsDataUrl(logoUrl).catch(() => "") : Promise.resolve(""),
@@ -1351,17 +1369,28 @@ export default function OrdenesOcupacionalesPage() {
       doc.line(126, nextY + 18, 196, nextY + 18);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
-      doc.text("MEDICO RESPONSABLE", 161, nextY + 23, { align: "center" });
+      const firmanteLabel = String(firmantePdfCtx?.firmante_label || (isLabArea ? "PROFESIONAL DE LABORATORIO" : "MEDICO RESPONSABLE"));
+      doc.text(firmanteLabel, 161, nextY + 23, { align: "center" });
       doc.setFont("helvetica", "normal");
-      const medicoNombre = String(orden.medico_nombre_snapshot || "No consignado");
-      doc.text(medicoNombre, 161, nextY + 28, { align: "center" });
+      const firmanteNombre = isLabArea
+        ? String(signer?.nombre || "No consignado")
+        : String(orden.medico_nombre_snapshot || "No consignado");
+      doc.text(firmanteNombre, 161, nextY + 28, { align: "center" });
+
       const cmp = String(orden.medico_cmp_snapshot || "").trim();
       const rne = String(orden.medico_rne_snapshot || "").trim();
       const rna = String(orden.medico_rna_snapshot || "").trim();
+      const labCargo = String(signer?.cargo || "").trim();
+      const labColegiatura = String(signer?.colegiatura || "").trim();
       doc.setFontSize(8);
-      if (cmp) doc.text(`CMP: ${cmp}`, 161, nextY + 32, { align: "center" });
-      if (rne) doc.text(`RNE: ${rne}`, 161, nextY + 36, { align: "center" });
-      if (rna) doc.text(`RNA: ${rna}`, 161, nextY + 40, { align: "center" });
+      if (isLabArea) {
+        if (labCargo) doc.text(labCargo, 161, nextY + 32, { align: "center" });
+        if (labColegiatura) doc.text(labColegiatura, 161, nextY + 36, { align: "center" });
+      } else {
+        if (cmp) doc.text(`CMP: ${cmp}`, 161, nextY + 32, { align: "center" });
+        if (rne) doc.text(`RNE: ${rne}`, 161, nextY + 36, { align: "center" });
+        if (rna) doc.text(`RNA: ${rna}`, 161, nextY + 40, { align: "center" });
+      }
 
       const pageCount = doc.getNumberOfPages();
       for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {

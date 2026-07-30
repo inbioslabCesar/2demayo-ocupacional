@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/init_api.php';
+require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/db_ocupacional.php';
 
 function out_exam($code, $payload)
@@ -10,7 +11,13 @@ function out_exam($code, $payload)
     }
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($payload);
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($json === false) {
+        http_response_code(500);
+        echo '{"success":false,"error":"No se pudo serializar respuesta JSON"}';
+        exit;
+    }
+    echo $json;
     exit;
 }
 
@@ -78,6 +85,168 @@ function table_exists_exam($conn, $table)
     $exists = (bool)$stmt->get_result()->fetch_row();
     $stmt->close();
     return $exists;
+}
+
+function column_exists_exam($conn, $table, $column)
+{
+    $stmt = $conn->prepare('SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1');
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param('ss', $table, $column);
+    $stmt->execute();
+    $exists = (bool)$stmt->get_result()->fetch_row();
+    $stmt->close();
+    return $exists;
+}
+
+function decode_json_any_exam($raw)
+{
+    if ($raw === null || $raw === '') {
+        return [];
+    }
+    $value = $raw;
+    for ($i = 0; $i < 3; $i++) {
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                break;
+            }
+            $value = $decoded;
+            continue;
+        }
+        break;
+    }
+    if (!is_array($value)) {
+        return [];
+    }
+    if (isset($value['nombre']) || isset($value['tipo']) || isset($value['referencias'])) {
+        return [$value];
+    }
+    return $value;
+}
+
+function force_utf8_exam_text($value)
+{
+    $text = trim((string)$value);
+    if ($text === '') {
+        return '';
+    }
+
+    if (@preg_match('//u', $text) === 1) {
+        return $text;
+    }
+
+    if (function_exists('mb_convert_encoding')) {
+        $converted = @mb_convert_encoding($text, 'UTF-8', 'UTF-8, ISO-8859-1, Windows-1252');
+        if (is_string($converted) && $converted !== '') {
+            $text = $converted;
+        }
+    } elseif (function_exists('iconv')) {
+        $converted = @iconv('Windows-1252', 'UTF-8//IGNORE', $text);
+        if ($converted === false || $converted === '') {
+            $converted = @iconv('ISO-8859-1', 'UTF-8//IGNORE', $text);
+        }
+        if ($converted !== false && $converted !== '') {
+            $text = $converted;
+        }
+    }
+
+    if (@preg_match('//u', $text) !== 1) {
+        $text = @utf8_encode($text);
+    }
+
+    $text = (string)$text;
+    // Elimina soft hyphen y caracteres invisibles que suelen romper inserts UTF-8.
+    $text = str_replace("\xC2\xAD", '', $text);
+    $text = str_replace("\xAD", '', $text);
+    $text = preg_replace('/[\x{200B}\x{FEFF}]/u', '', $text);
+
+    return trim($text);
+}
+
+function execute_stmt_exam($stmt, $errorMessage)
+{
+    try {
+        return $stmt->execute();
+    } catch (Throwable $e) {
+        out_exam(500, ['success' => false, 'error' => $errorMessage]);
+    }
+    return false;
+}
+
+function repair_mojibake_exam_text($value)
+{
+    $text = force_utf8_exam_text($value);
+    if ($text === '') {
+        return '';
+    }
+
+    if (strpos($text, 'Ã') === false && strpos($text, 'Â') === false && strpos($text, 'â') === false) {
+        return $text;
+    }
+
+    $repaired = $text;
+    if (function_exists('iconv')) {
+        for ($i = 0; $i < 2; $i++) {
+            $latin = @iconv('UTF-8', 'ISO-8859-1//IGNORE', $repaired);
+            if ($latin === false || $latin === '') {
+                break;
+            }
+
+            $utf8 = @iconv('ISO-8859-1', 'UTF-8//IGNORE', $latin);
+            if ($utf8 === false || $utf8 === '' || $utf8 === $repaired) {
+                break;
+            }
+
+            $repaired = $utf8;
+            if (strpos($repaired, 'Ã') === false && strpos($repaired, 'Â') === false && strpos($repaired, 'â') === false) {
+                break;
+            }
+        }
+    }
+
+    // Limpia prefijos residuales de conversiones antiguas (ej: "Â").
+    $repaired = str_replace(chr(194), '', $repaired);
+
+    // Normalizaciones clinicas frecuentes cuando existe patron degradado "Ã�".
+    $semanticMap = [
+        'BioquÃ�mica' => 'Bioquímica',
+        'UroanÃ�lisis' => 'Uroanálisis',
+        'HematologÃ�a' => 'Hematología',
+        'InmunologÃ�a' => 'Inmunología',
+        'QuÃ�mica' => 'Química',
+        'LipÃ�dico' => 'Lipídico',
+        'MÃ�S' => 'MÁS',
+        'Ã�cido' => 'Ácido',
+        'Ã�rico' => 'Úrico',
+        'Ã�ricos' => 'Úricos',
+    ];
+    $repaired = strtr($repaired, $semanticMap);
+
+    return trim($repaired);
+}
+
+function normalize_mojibake_recursive_exam($value)
+{
+    if (is_array($value)) {
+        $normalized = [];
+        foreach ($value as $k => $v) {
+            $normalized[$k] = normalize_mojibake_recursive_exam($v);
+        }
+        return $normalized;
+    }
+
+    if (is_string($value)) {
+        return repair_mojibake_exam_text($value);
+    }
+
+    return $value;
+}
+
+function build_default_codigo_importado_exam($labId)
+{
+    return 'LAB_' . str_pad((string)((int)$labId), 4, '0', STR_PAD_LEFT);
 }
 
 function has_master_grupos_exam($conn)
@@ -278,6 +447,125 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     $accion = trim((string)($_GET['accion'] ?? 'listar'));
 
+    if ($accion === 'catalogo_laboratorio_origen') {
+        if (!isset($mysqli) || !($mysqli instanceof mysqli)) {
+            out_exam(500, ['success' => false, 'error' => 'No se pudo conectar a la base clinica para listar examenes de laboratorio']);
+        }
+        if (!table_exists_exam($mysqli, 'examenes_laboratorio')) {
+            out_exam(422, ['success' => false, 'error' => 'No existe tabla examenes_laboratorio en la base clinica']);
+        }
+
+        $q = trim((string)($_GET['q'] ?? ''));
+        $page = (int)($_GET['page'] ?? 1);
+        $perPage = (int)($_GET['per_page'] ?? 50);
+        $page = max(1, $page);
+        $perPage = max(1, min($perPage, 300));
+        $offset = ($page - 1) * $perPage;
+
+        $where = ['activo = 1'];
+        $types = '';
+        $params = [];
+        if ($q !== '') {
+            $tokens = preg_split('/\s+/u', $q, -1, PREG_SPLIT_NO_EMPTY);
+            if (!is_array($tokens) || empty($tokens)) {
+                $tokens = [$q];
+            }
+
+            foreach ($tokens as $token) {
+                $term = '%' . $token . '%';
+                $where[] = '(nombre LIKE ? OR categoria LIKE ? OR metodologia LIKE ?)';
+                $types .= 'sss';
+                $params[] = $term;
+                $params[] = $term;
+                $params[] = $term;
+            }
+        }
+        $whereSql = ' WHERE ' . implode(' AND ', $where);
+
+        $stmtCount = $mysqli->prepare('SELECT COUNT(*) AS total FROM examenes_laboratorio' . $whereSql);
+        if (!$stmtCount) {
+            out_exam(500, ['success' => false, 'error' => 'No se pudo contar examenes de laboratorio']);
+        }
+        bind_params_dynamic_exam($stmtCount, $types, $params);
+        $stmtCount->execute();
+        $total = (int)($stmtCount->get_result()->fetch_assoc()['total'] ?? 0);
+        $stmtCount->close();
+
+        $hasCurrentVersionId = column_exists_exam($mysqli, 'examenes_laboratorio', 'current_version_id');
+        $hasVersionActual = column_exists_exam($mysqli, 'examenes_laboratorio', 'version_actual');
+        $sqlRows = 'SELECT id,
+                           nombre,
+                           categoria,
+                           metodologia,
+                           valores_referenciales,
+                           precio_publico,
+                           precio_convenio,
+                           tipo_tubo,
+                           tipo_frasco,
+                           tiempo_resultado,
+                           condicion_paciente,
+                           preanalitica,'
+                           . ($hasCurrentVersionId ? ' current_version_id,' : ' NULL AS current_version_id,')
+                           . ($hasVersionActual ? ' version_actual' : ' NULL AS version_actual')
+                           . ' FROM examenes_laboratorio'
+                           . $whereSql
+                           . ' ORDER BY nombre ASC, id ASC LIMIT ? OFFSET ?';
+        $stmtRows = $mysqli->prepare($sqlRows);
+        if (!$stmtRows) {
+            out_exam(500, ['success' => false, 'error' => 'No se pudo listar examenes de laboratorio']);
+        }
+        $typesRows = $types . 'ii';
+        $paramsRows = $params;
+        $paramsRows[] = $perPage;
+        $paramsRows[] = $offset;
+        bind_params_dynamic_exam($stmtRows, $typesRows, $paramsRows);
+        $stmtRows->execute();
+        $resRows = $stmtRows->get_result();
+
+        $rows = [];
+        while ($row = $resRows->fetch_assoc()) {
+            $nombre = repair_mojibake_exam_text($row['nombre'] ?? '');
+            $categoria = repair_mojibake_exam_text($row['categoria'] ?? '');
+            $metodologia = repair_mojibake_exam_text($row['metodologia'] ?? '');
+            $tipoTubo = repair_mojibake_exam_text($row['tipo_tubo'] ?? '');
+            $tipoFrasco = repair_mojibake_exam_text($row['tipo_frasco'] ?? '');
+            $tiempoResultado = repair_mojibake_exam_text($row['tiempo_resultado'] ?? '');
+            $condicionPaciente = repair_mojibake_exam_text($row['condicion_paciente'] ?? '');
+            $preanalitica = repair_mojibake_exam_text($row['preanalitica'] ?? '');
+            $valoresReferenciales = normalize_mojibake_recursive_exam(
+                decode_json_any_exam($row['valores_referenciales'] ?? '')
+            );
+            $rows[] = [
+                'id' => (int)($row['id'] ?? 0),
+                'nombre' => $nombre,
+                'categoria' => $categoria,
+                'metodologia' => $metodologia,
+                'valores_referenciales' => $valoresReferenciales,
+                'precio_publico' => isset($row['precio_publico']) ? (float)$row['precio_publico'] : 0,
+                'precio_convenio' => isset($row['precio_convenio']) ? (float)$row['precio_convenio'] : 0,
+                'tipo_tubo' => $tipoTubo,
+                'tipo_frasco' => $tipoFrasco,
+                'tiempo_resultado' => $tiempoResultado,
+                'condicion_paciente' => $condicionPaciente,
+                'preanalitica' => $preanalitica,
+                'current_version_id' => isset($row['current_version_id']) ? (int)$row['current_version_id'] : 0,
+                'version_actual' => isset($row['version_actual']) ? (int)$row['version_actual'] : 0,
+            ];
+        }
+        $stmtRows->close();
+
+        out_exam(200, [
+            'success' => true,
+            'data' => $rows,
+            'meta' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'total_pages' => $total > 0 ? (int)ceil($total / $perPage) : 0,
+            ],
+        ]);
+    }
+
     if ($accion === 'catalogo_grupos') {
         out_exam(200, [
             'success' => true,
@@ -466,13 +754,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     $rows = [];
     while ($row = $res->fetch_assoc()) {
+        $descripcionRow = repair_mojibake_exam_text($row['descripcion'] ?? '');
+        $grupoRow = repair_mojibake_exam_text($row['grupo'] ?? '');
+        $subgrupoRow = repair_mojibake_exam_text($row['subgrupo'] ?? '');
+        $valoresNormalesRow = repair_mojibake_exam_text($row['valores_normales'] ?? '');
         $rows[] = [
             'id' => (int)$row['id'],
             'codigo' => (string)($row['codigo'] ?? ''),
-            'descripcion' => (string)($row['descripcion'] ?? ''),
-            'grupo' => (string)($row['grupo'] ?? ''),
-            'subgrupo' => (string)($row['subgrupo'] ?? ''),
-            'valores_normales' => (string)($row['valores_normales'] ?? ''),
+            'descripcion' => $descripcionRow,
+            'grupo' => $grupoRow,
+            'subgrupo' => $subgrupoRow,
+            'valores_normales' => $valoresNormalesRow,
             'precio' => (float)($row['precio'] ?? 0),
             'posicion' => (int)($row['posicion'] ?? 0),
             'estado' => (string)($row['estado'] ?? 'activo'),
@@ -800,6 +1092,213 @@ if ($accion === 'eliminar_grupo_maestro') {
     out_exam(200, ['success' => true, 'message' => 'Registro inactivado']);
 }
 
+if ($accion === 'importar_desde_laboratorio') {
+    if (!isset($mysqli) || !($mysqli instanceof mysqli)) {
+        out_exam(500, ['success' => false, 'error' => 'No se pudo conectar a la base clinica para importar examen']);
+    }
+    if (!table_exists_exam($mysqli, 'examenes_laboratorio')) {
+        out_exam(422, ['success' => false, 'error' => 'No existe tabla examenes_laboratorio en la base clinica']);
+    }
+
+    $requiredCols = [
+        'origen_datos',
+        'laboratorio_examen_id',
+        'laboratorio_version_id',
+        'laboratorio_snapshot_json',
+    ];
+    foreach ($requiredCols as $colName) {
+        if (!column_exists_exam($mysqliOcup, 'ocupacional_examenes_generales', $colName)) {
+            out_exam(500, ['success' => false, 'error' => 'Falta columna ' . $colName . ' en ocupacional_examenes_generales. Aplicar migracion de acople laboratorio.']);
+        }
+    }
+
+    $labId = (int)($payload['laboratorio_examen_id'] ?? 0);
+    if ($labId <= 0) {
+        out_exam(422, ['success' => false, 'error' => 'laboratorio_examen_id es obligatorio']);
+    }
+
+    $grupoId = (int)($payload['grupo_id'] ?? 0);
+    $subgrupoId = (int)($payload['subgrupo_id'] ?? 0);
+    $grupoRaw = trim((string)($payload['grupo'] ?? 'LABORATORIO'));
+    $subgrupoRaw = trim((string)($payload['subgrupo'] ?? ''));
+
+    $codigoInput = strtoupper(force_utf8_exam_text($payload['codigo'] ?? ''));
+    $codigo = $codigoInput !== '' ? $codigoInput : build_default_codigo_importado_exam($labId);
+    $precioInput = normalize_precio_exam($payload['precio'] ?? null);
+    $posicion = isset($payload['posicion']) ? max(0, (int)$payload['posicion']) : 0;
+
+    $stmtLab = $mysqli->prepare('SELECT id, nombre, categoria, metodologia, valores_referenciales,
+                                        precio_publico, precio_convenio, tipo_tubo, tipo_frasco,
+                                        tiempo_resultado, condicion_paciente, preanalitica,
+                                        activo
+                                 FROM examenes_laboratorio
+                                 WHERE id = ? LIMIT 1');
+    if (!$stmtLab) {
+        out_exam(500, ['success' => false, 'error' => 'No se pudo consultar examen de laboratorio']);
+    }
+    $stmtLab->bind_param('i', $labId);
+    $stmtLab->execute();
+    $lab = $stmtLab->get_result()->fetch_assoc();
+    $stmtLab->close();
+
+    if (!$lab || (int)($lab['activo'] ?? 0) !== 1) {
+        out_exam(404, ['success' => false, 'error' => 'Examen de laboratorio no encontrado o inactivo']);
+    }
+
+    $labNombre = repair_mojibake_exam_text($lab['nombre'] ?? '');
+    $labCategoria = repair_mojibake_exam_text($lab['categoria'] ?? '');
+    $labMetodologia = repair_mojibake_exam_text($lab['metodologia'] ?? '');
+    $labTipoTubo = repair_mojibake_exam_text($lab['tipo_tubo'] ?? '');
+    $labTipoFrasco = repair_mojibake_exam_text($lab['tipo_frasco'] ?? '');
+    $labTiempoResultado = repair_mojibake_exam_text($lab['tiempo_resultado'] ?? '');
+    $labCondicionPaciente = repair_mojibake_exam_text($lab['condicion_paciente'] ?? '');
+    $labPreanalitica = repair_mojibake_exam_text($lab['preanalitica'] ?? '');
+
+    [$grupo, $subgrupo] = resolve_nombre_grupo_subgrupo_exam($mysqliOcup, $grupoId, $subgrupoId, $grupoRaw, $subgrupoRaw);
+    $grupo = repair_mojibake_exam_text($grupo);
+    $subgrupo = repair_mojibake_exam_text($subgrupo);
+    if ($subgrupo === '') {
+        $subgrupo = repair_mojibake_exam_text($labCategoria);
+    }
+
+    $versionId = 0;
+    if (table_exists_exam($mysqli, 'examenes_laboratorio_versiones')) {
+        $stmtVersion = $mysqli->prepare('SELECT id
+                                         FROM examenes_laboratorio_versiones
+                                         WHERE examen_id = ?
+                                         ORDER BY version_num DESC, id DESC
+                                         LIMIT 1');
+        if ($stmtVersion) {
+            $stmtVersion->bind_param('i', $labId);
+            $stmtVersion->execute();
+            $versionId = (int)($stmtVersion->get_result()->fetch_assoc()['id'] ?? 0);
+            $stmtVersion->close();
+        }
+    }
+
+    $valoresReferenciales = normalize_mojibake_recursive_exam(
+        decode_json_any_exam($lab['valores_referenciales'] ?? '')
+    );
+    $snapshot = [
+        'origen' => 'laboratorio_moderno',
+        'laboratorio_examen_id' => $labId,
+        'laboratorio_version_id' => $versionId,
+        'nombre' => $labNombre,
+        'categoria' => $labCategoria,
+        'metodologia' => $labMetodologia,
+        'valores_referenciales' => $valoresReferenciales,
+        'precio_publico' => isset($lab['precio_publico']) ? (float)$lab['precio_publico'] : 0,
+        'precio_convenio' => isset($lab['precio_convenio']) ? (float)$lab['precio_convenio'] : 0,
+        'tipo_tubo' => $labTipoTubo,
+        'tipo_frasco' => $labTipoFrasco,
+        'tiempo_resultado' => $labTiempoResultado,
+        'condicion_paciente' => $labCondicionPaciente,
+        'preanalitica' => $labPreanalitica,
+        'imported_at' => date('c'),
+    ];
+    $snapshotJson = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $descripcion = repair_mojibake_exam_text($labNombre);
+    $valoresNormales = repair_mojibake_exam_text($labMetodologia);
+    if ($valoresNormales === '') {
+        $valoresNormales = 'Importado desde laboratorio moderno';
+    }
+    $precio = $precioInput;
+    if ($precio === null) {
+        $precio = (float)($lab['precio_publico'] ?? 0);
+    }
+
+    $stmtByLab = $mysqliOcup->prepare('SELECT id, codigo
+                                       FROM ocupacional_examenes_generales
+                                       WHERE laboratorio_examen_id = ?
+                                       LIMIT 1');
+    if (!$stmtByLab) {
+        out_exam(500, ['success' => false, 'error' => 'No se pudo validar vinculacion ocupacional del examen']);
+    }
+    $stmtByLab->bind_param('i', $labId);
+    $stmtByLab->execute();
+    $ocupActual = $stmtByLab->get_result()->fetch_assoc();
+    $stmtByLab->close();
+
+    if (!$ocupActual) {
+        $stmtDupCod = $mysqliOcup->prepare('SELECT id FROM ocupacional_examenes_generales WHERE codigo = ? LIMIT 1');
+        if ($stmtDupCod) {
+            $stmtDupCod->bind_param('s', $codigo);
+            $stmtDupCod->execute();
+            $dupCod = $stmtDupCod->get_result()->fetch_assoc();
+            $stmtDupCod->close();
+            if ($dupCod) {
+                $codigo = build_default_codigo_importado_exam($labId) . '_' . (string)$labId;
+            }
+        }
+
+        $stmtInsLab = $mysqliOcup->prepare('INSERT INTO ocupacional_examenes_generales
+                                             (codigo, descripcion, grupo, subgrupo, valores_normales, precio, posicion, estado,
+                                              origen_datos, laboratorio_examen_id, laboratorio_version_id, laboratorio_snapshot_json,
+                                              created_by, updated_by)
+                                             VALUES (?, ?, ?, ?, ?, ?, ?, "activo", "importado_lab", ?, ?, ?, ?, ?)');
+        if (!$stmtInsLab) {
+            out_exam(500, ['success' => false, 'error' => 'No se pudo insertar examen ocupacional importado']);
+        }
+        $stmtInsLab->bind_param('sssssdiiisii', $codigo, $descripcion, $grupo, $subgrupo, $valoresNormales, $precio, $posicion, $labId, $versionId, $snapshotJson, $usuarioId, $usuarioId);
+        if (!execute_stmt_exam($stmtInsLab, 'No se pudo guardar examen ocupacional importado')) {
+            $stmtInsLab->close();
+            out_exam(500, ['success' => false, 'error' => 'No se pudo guardar examen ocupacional importado']);
+        }
+        $newId = (int)$stmtInsLab->insert_id;
+        $stmtInsLab->close();
+
+        out_exam(201, [
+            'success' => true,
+            'data' => [
+                'id' => $newId,
+                'codigo' => $codigo,
+                'descripcion' => $descripcion,
+                'origen_datos' => 'importado_lab',
+                'laboratorio_examen_id' => $labId,
+                'laboratorio_version_id' => $versionId,
+                'accion' => 'creado',
+            ],
+        ]);
+    }
+
+    $ocupId = (int)($ocupActual['id'] ?? 0);
+    $stmtUpLab = $mysqliOcup->prepare('UPDATE ocupacional_examenes_generales
+                                       SET codigo = ?,
+                                           descripcion = ?,
+                                           grupo = ?,
+                                           subgrupo = ?,
+                                           valores_normales = ?,
+                                           precio = ?,
+                                           posicion = ?,
+                                           origen_datos = "importado_lab",
+                                           laboratorio_examen_id = ?,
+                                           laboratorio_version_id = ?,
+                                           laboratorio_snapshot_json = ?,
+                                           updated_by = ?,
+                                           updated_at = NOW()
+                                       WHERE id = ?
+                                       LIMIT 1');
+    if (!$stmtUpLab) {
+        out_exam(500, ['success' => false, 'error' => 'No se pudo actualizar examen ocupacional importado']);
+    }
+    $stmtUpLab->bind_param('sssssdiiisii', $codigo, $descripcion, $grupo, $subgrupo, $valoresNormales, $precio, $posicion, $labId, $versionId, $snapshotJson, $usuarioId, $ocupId);
+    execute_stmt_exam($stmtUpLab, 'No se pudo actualizar examen ocupacional importado');
+    $stmtUpLab->close();
+
+    out_exam(200, [
+        'success' => true,
+        'data' => [
+            'id' => $ocupId,
+            'codigo' => $codigo,
+            'descripcion' => $descripcion,
+            'origen_datos' => 'importado_lab',
+            'laboratorio_examen_id' => $labId,
+            'laboratorio_version_id' => $versionId,
+            'accion' => 'actualizado',
+        ],
+    ]);
+}
+
 if ($accion === 'inactivar') {
     $id = (int)($payload['id'] ?? 0);
     if ($id <= 0) {
@@ -852,17 +1351,19 @@ if ($accion === 'inactivar') {
 }
 
 $id = (int)($payload['id'] ?? 0);
-$codigo = strtoupper(trim((string)($payload['codigo'] ?? '')));
-$descripcion = trim((string)($payload['descripcion'] ?? ''));
+$codigo = strtoupper(force_utf8_exam_text($payload['codigo'] ?? ''));
+$descripcion = repair_mojibake_exam_text($payload['descripcion'] ?? '');
 $grupoId = (int)($payload['grupo_id'] ?? 0);
 $subgrupoId = (int)($payload['subgrupo_id'] ?? 0);
-$grupo = trim((string)($payload['grupo'] ?? ''));
-$subgrupo = trim((string)($payload['subgrupo'] ?? ''));
-$valoresNormales = trim((string)($payload['valores_normales'] ?? ''));
+$grupo = repair_mojibake_exam_text($payload['grupo'] ?? '');
+$subgrupo = repair_mojibake_exam_text($payload['subgrupo'] ?? '');
+$valoresNormales = repair_mojibake_exam_text($payload['valores_normales'] ?? '');
 $precio = normalize_precio_exam($payload['precio'] ?? 0);
 $posicion = isset($payload['posicion']) ? (int)$payload['posicion'] : 0;
 
 [$grupo, $subgrupo] = resolve_nombre_grupo_subgrupo_exam($mysqliOcup, $grupoId, $subgrupoId, $grupo, $subgrupo);
+$grupo = repair_mojibake_exam_text($grupo);
+$subgrupo = repair_mojibake_exam_text($subgrupo);
 
 if ($codigo === '') {
     out_exam(422, ['success' => false, 'error' => 'codigo es obligatorio']);
@@ -895,7 +1396,7 @@ if ($id > 0) {
         out_exam(500, ['success' => false, 'error' => 'No se pudo preparar actualizacion']);
     }
     $stmt->bind_param('sssssdiii', $codigo, $descripcion, $grupo, $subgrupo, $valoresNormales, $precio, $posicion, $usuarioId, $id);
-    $stmt->execute();
+    execute_stmt_exam($stmt, 'No se pudo actualizar el examen');
     $affected = (int)$stmt->affected_rows;
     $stmt->close();
 
@@ -940,7 +1441,7 @@ if (!$stmt) {
 }
 $stmt->bind_param('sssssdiii', $codigo, $descripcion, $grupo, $subgrupo, $valoresNormales, $precio, $posicion, $usuarioId, $usuarioId);
 
-if (!$stmt->execute()) {
+if (!execute_stmt_exam($stmt, 'No se pudo registrar el examen')) {
     $stmt->close();
     out_exam(500, ['success' => false, 'error' => 'No se pudo registrar el examen']);
 }

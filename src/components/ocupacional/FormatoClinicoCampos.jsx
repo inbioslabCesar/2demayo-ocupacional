@@ -34,6 +34,57 @@ function SeccionClinica({ title, children }) {
   );
 }
 
+const EPWORTH_QUESTIONS = [
+  ["p1", "Sentado leyendo"],
+  ["p2", "Viendo televisión"],
+  ["p3", "Sentado inactivo en lugar público"],
+  ["p4", "Como pasajero en auto por una hora"],
+  ["p5", "Descansando echado por la tarde"],
+  ["p6", "Sentado charlando con alguien"],
+  ["p7", "Sentado después de una comida sin alcohol"],
+  ["p8", "En auto detenido unos minutos en tráfico"],
+];
+
+const FOBIA_ESTRES_QUESTIONS = [
+  ["p1", "Tendencia a sufrir frecuentes dolores de cabeza"],
+  ["p2", "Sensación constante de tensión"],
+  ["p3", "Cansancio excesivo la mayor parte del tiempo"],
+  ["p4", "Sensación de presión en la cabeza"],
+  ["p5", "Falta de energía e impulso"],
+  ["p6", "Temblores, sudoración o taquicardia"],
+  ["p7", "Problemas de sueño o pesadillas"],
+  ["p8", "Sensación de ahogo sin razón"],
+  ["p9", "Conclusiones catastróficas con facilidad"],
+  ["p10", "Hipersensibilidad emocional"],
+  ["p11", "Encontrar algo por lo que preocuparse"],
+  ["p12", "Pensamientos negativos al relajarse"],
+  ["p13", "Conciencia excesiva de sensaciones corporales"],
+  ["p14", "Reaccionar en exceso a problemas pequeños"],
+  ["p15", "Anticipar que sucederá lo peor"],
+  ["p16", "Necesidad de controlar todo a distancia"],
+  ["p17", "Tomarse a nivel personal lo que sale mal"],
+  ["p18", "Sobresaltos ante estímulos menores"],
+  ["p19", "Dificultad para concentrarse"],
+  ["p20", "Oleadas de miedo o pánico sin causa"],
+  ["p21", "Indecisión excesiva"],
+  ["p22", "Sensación de perder el control de situaciones"],
+];
+
+function formatearResumenLaboratorio(parametros) {
+  if (!Array.isArray(parametros) || parametros.length === 0) return "";
+  const lineas = parametros
+    .filter((parametro) => parametro && typeof parametro === "object")
+    .map((parametro) => {
+      const nombre = String(parametro.nombre || "").trim();
+      const valor = String(parametro.valor || "").trim();
+      const unidad = String(parametro.unidad || "").trim();
+      if (!nombre || !valor) return "";
+      return unidad ? `${nombre}: ${valor} ${unidad}` : `${nombre}: ${valor}`;
+    })
+    .filter((linea) => linea !== "");
+  return lineas.join("\n");
+}
+
 export default function FormatoClinicoCampos({ templateCode, datos, onChange, onAudiometriaChange, onParametroChange, disabled }) {
   const safeDatos = datos && typeof datos === "object" ? datos : {};
   const field = (key, label, options = {}) => <CampoClinico key={key} label={label} value={safeDatos[key]} onChange={(value) => onChange(key, value)} disabled={disabled} {...options} />;
@@ -76,18 +127,11 @@ export default function FormatoClinicoCampos({ templateCode, datos, onChange, on
       </div>
     );
   }
-
   if (templateCode === "lab_basico") {
     const parametros = Array.isArray(safeDatos.parametros) ? safeDatos.parametros : [];
-    const updateParametro = (index, key, value) => {
-      if (onParametroChange) {
-        onParametroChange(index, key, value);
-        return;
-      }
-      onChange("parametros", parametros.map((parametro, currentIndex) => currentIndex === index ? { ...parametro, [key]: value } : parametro));
-    };
-    const addParametro = () => onChange("parametros", [...parametros, { grupo: "", nombre: "", valor: "", unidad: "", referencia: "" }]);
-    const removeParametro = (index) => onChange("parametros", parametros.filter((_, currentIndex) => currentIndex !== index));
+        const resumenAuto = formatearResumenLaboratorio(parametros);
+        const resumenActual = String(safeDatos.resultado_laboratorio_resumen || "").trim();
+        const resumenVisible = resumenActual || resumenAuto;
     return (
       <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
         <SeccionClinica title="Datos de la evaluación">
@@ -97,21 +141,17 @@ export default function FormatoClinicoCampos({ templateCode, datos, onChange, on
             {field("condiciones_muestra", "Condiciones de la muestra")}
           </div>
         </SeccionClinica>
-        <SeccionClinica title="Resultados de laboratorio">
-          <div className="space-y-2">
-            {parametros.length === 0 ? <p className="text-xs text-slate-500">No hay parámetros registrados.</p> : null}
-            {parametros.map((parametro, index) => (
-              <div key={`${parametro.nombre || "parametro"}-${index}`} className="grid grid-cols-1 gap-2 rounded border border-slate-200 bg-slate-50 p-2 sm:grid-cols-2 xl:grid-cols-[1fr_1.4fr_1fr_0.7fr_1fr_auto]">
-                <CampoClinico label="Grupo" value={parametro.grupo} onChange={(value) => updateParametro(index, "grupo", value)} disabled={disabled} />
-                <CampoClinico label="Parámetro" value={parametro.nombre} onChange={(value) => updateParametro(index, "nombre", value)} disabled={disabled} />
-                <CampoClinico label="Resultado" value={parametro.valor} onChange={(value) => updateParametro(index, "valor", value)} disabled={disabled} />
-                <CampoClinico label="Unidad" value={parametro.unidad} onChange={(value) => updateParametro(index, "unidad", value)} disabled={disabled} />
-                <CampoClinico label="Referencia" value={parametro.referencia} onChange={(value) => updateParametro(index, "referencia", value)} disabled={disabled} />
-                <button type="button" className="h-9 self-end rounded border border-red-200 px-3 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-40" onClick={() => removeParametro(index)} disabled={disabled} aria-label={`Eliminar parámetro ${index + 1}`}>Eliminar</button>
-              </div>
-            ))}
-          </div>
-          <button type="button" className="mt-3 rounded border border-cyan-300 px-3 py-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40" onClick={addParametro} disabled={disabled}>Agregar parámetro</button>
+        <SeccionClinica title="Resultados de laboratorio (resumen)">
+          <CampoClinico
+            label="Texto único de laboratorio"
+            value={resumenVisible}
+            multiline
+            disabled={disabled}
+            onChange={(value) => onChange("resultado_laboratorio_resumen", value)}
+          />
+          <p className="mt-2 text-[11px] text-slate-500">
+            Se muestra en formato resumido para evitar renderizar todos los parámetros en esta vista.
+          </p>
         </SeccionClinica>
         <SeccionClinica title="Interpretación">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -173,6 +213,64 @@ export default function FormatoClinicoCampos({ templateCode, datos, onChange, on
             </div>
           </SeccionClinica>
         ) : null}
+      </div>
+    );
+  }
+
+  if (templateCode === "epworth_test") {
+    const total = EPWORTH_QUESTIONS.reduce((acc, [key]) => acc + Number(safeDatos[key] || 0), 0);
+    const optionLabel = [
+      ["", "Seleccionar"],
+      ["0", "0 - Nunca se adormilaría"],
+      ["1", "1 - Pocas posibilidades"],
+      ["2", "2 - Moderadas posibilidades"],
+      ["3", "3 - Grandes posibilidades"],
+    ];
+    return (
+      <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
+        <SeccionClinica title="Test de Epworth">
+          <p className="mb-3 text-xs text-slate-600">Valorar cada respuesta como promedio de todos los días y a lo largo de todo el día.</p>
+          <div className="space-y-2">
+            {EPWORTH_QUESTIONS.map(([key, label], index) => (
+              <div key={key} className="grid grid-cols-1 gap-2 rounded border border-slate-200 bg-white p-2 md:grid-cols-[1fr_280px]">
+                <p className="text-xs font-medium text-slate-700">{index + 1}. {label}</p>
+                <SeleccionClinica label="Respuesta" value={safeDatos[key]} options={optionLabel} onChange={(value) => onChange(key, value)} disabled={disabled} />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 rounded border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-900">Suma total de puntos: {Number.isFinite(total) ? total : 0}</div>
+        </SeccionClinica>
+        <SeccionClinica title="Observaciones">
+          {field("obs", "Observaciones", { multiline: true })}
+        </SeccionClinica>
+      </div>
+    );
+  }
+
+  if (templateCode === "fobia_estres") {
+    const totalSi = FOBIA_ESTRES_QUESTIONS.reduce((acc, [key]) => acc + (String(safeDatos[key] || "").toUpperCase() === "SI" ? 1 : 0), 0);
+    const optionLabel = [
+      ["", "Seleccionar"],
+      ["SI", "SI"],
+      ["NO", "NO"],
+    ];
+    return (
+      <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3">
+        <SeccionClinica title="Test de Fobias y Estrés">
+          <p className="mb-3 text-xs text-slate-600">Responder SI si te afecta habitualmente, y NO si no te afecta en absoluto.</p>
+          <div className="space-y-2">
+            {FOBIA_ESTRES_QUESTIONS.map(([key, label], index) => (
+              <div key={key} className="grid grid-cols-1 gap-2 rounded border border-slate-200 bg-white p-2 md:grid-cols-[1fr_180px]">
+                <p className="text-xs font-medium text-slate-700">{index + 1}. {label}</p>
+                <SeleccionClinica label="Respuesta" value={String(safeDatos[key] || "").toUpperCase()} options={optionLabel} onChange={(value) => onChange(key, String(value || "").toUpperCase())} disabled={disabled} />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">Respuestas "SI": {totalSi}</div>
+        </SeccionClinica>
+        <SeccionClinica title="Observaciones">
+          {field("obs", "Observaciones", { multiline: true })}
+        </SeccionClinica>
       </div>
     );
   }
