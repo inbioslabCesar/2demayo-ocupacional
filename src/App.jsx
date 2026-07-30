@@ -42,6 +42,12 @@ const AgendarConsultaPage = lazy(() =>
 const MedicoConsultasPage = lazy(() =>
   import("./pages/MedicoConsultasPage.jsx")
 );
+const MisEvaluacionesOcupacionalesPage = lazy(() =>
+  import("./pages/ocupacional/MisEvaluacionesOcupacionalesPage.jsx")
+);
+const MisTriajesOcupacionalesPage = lazy(() =>
+  import("./pages/ocupacional/MisTriajesOcupacionalesPage.jsx")
+);
 const MedicosPage = lazy(() => import("./pages/MedicosPage.jsx"));
 const PanelMedicoPage = lazy(() => import("./pages/PanelMedicoPage.jsx"));
 const HistoriaClinicaPage = lazy(() =>
@@ -137,6 +143,7 @@ const ProtocolosOcupacionalesPage = lazy(() => import("./pages/ocupacional/Proto
 const OrdenesOcupacionalesPage = lazy(() => import("./pages/ocupacional/OrdenesOcupacionalesPage.jsx"));
 const EvaluacionMedicaOcupacionalPage = lazy(() => import("./pages/ocupacional/EvaluacionMedicaOcupacionalPage.jsx"));
 const FormatoClinicoExamenPage = lazy(() => import("./pages/ocupacional/FormatoClinicoExamenPage.jsx"));
+const EmpresaPortalPanelPage = lazy(() => import("./pages/ocupacional/EmpresaPortalPanelPage.jsx"));
 
 // Reinicia el ErrorBoundary en cada cambio de ruta para que errores de una
 // página no persistan al navegar a otra (ej. presionar el botón Back).
@@ -474,18 +481,25 @@ function App() {
   const clearClientSessionState = () => {
     sessionStorage.removeItem("usuario");
     sessionStorage.removeItem("medico");
+    sessionStorage.removeItem("empresa_portal");
+    sessionStorage.removeItem("user_role");
     localStorage.removeItem("enfermero_panel_tab");
   };
 
   // Capturar si había sesión en sessionStorage ANTES del primer render.
   // Si estaba vacío el usuario debe hacer login manual; no auto-restaurar desde cookie PHP.
   const hadSessionOnMount = React.useRef(
-    Boolean(sessionStorage.getItem("usuario") || sessionStorage.getItem("medico"))
+    Boolean(
+      sessionStorage.getItem("usuario")
+      || sessionStorage.getItem("medico")
+      || sessionStorage.getItem("empresa_portal")
+    )
   );
 
   const [usuario, setUsuario] = useState(() => {
     // Restaurar usuario o medico desde sessionStorage si existe
     const storedUsuario = sessionStorage.getItem("usuario");
+    const storedEmpresa = sessionStorage.getItem("empresa_portal");
     const storedMedico = sessionStorage.getItem("medico");
     if (storedUsuario) {
       try {
@@ -497,6 +511,13 @@ function App() {
     if (storedMedico) {
       try {
         return hydrateUsuario(JSON.parse(storedMedico));
+      } catch {
+        return null;
+      }
+    }
+    if (storedEmpresa) {
+      try {
+        return hydrateUsuario(JSON.parse(storedEmpresa));
       } catch {
         return null;
       }
@@ -629,9 +650,15 @@ function App() {
       if (usuario.rol === "medico") {
         sessionStorage.setItem("medico", JSON.stringify(payload));
         sessionStorage.removeItem("usuario");
+        sessionStorage.removeItem("empresa_portal");
+      } else if (usuario.rol === "empresa") {
+        sessionStorage.setItem("empresa_portal", JSON.stringify(payload));
+        sessionStorage.setItem("usuario", JSON.stringify(payload));
+        sessionStorage.removeItem("medico");
       } else {
         sessionStorage.setItem("usuario", JSON.stringify(payload));
         sessionStorage.removeItem("medico");
+        sessionStorage.removeItem("empresa_portal");
       }
     }
   }, [usuario]);
@@ -649,6 +676,11 @@ function App() {
         const rawUsuario = sessionStorage.getItem("usuario");
         if (rawUsuario) {
           setUsuario(hydrateUsuario(JSON.parse(rawUsuario)));
+          return;
+        }
+        const rawEmpresa = sessionStorage.getItem("empresa_portal");
+        if (rawEmpresa) {
+          setUsuario(hydrateUsuario(JSON.parse(rawEmpresa)));
         }
       } catch {
         // ignore
@@ -663,6 +695,8 @@ function App() {
 
   const getHomeByRole = (rol) => {
     switch (rol) {
+      case "empresa":
+        return "/empresa/panel";
       case "medico":
         return "/mis-consultas";
       case "laboratorista":
@@ -721,7 +755,17 @@ function App() {
       ) : null}
       {authBootstrap.phase === "infra_error" || authBootstrap.phase === "checking" ? null : (
       <BrowserRouter basename={ROUTER_BASENAME}>
-        {usuario ? (
+        {usuario?.rol === "empresa" ? (
+          <Suspense fallback={<div className="p-8 text-center">Cargando módulo...</div>}>
+            <Routes>
+              <Route
+                path="/empresa/panel"
+                element={<EmpresaPortalPanelPage usuario={usuario} onLogout={handleLogout} />}
+              />
+              <Route path="*" element={<Navigate to="/empresa/panel" replace />} />
+            </Routes>
+          </Suspense>
+        ) : usuario ? (
           <>
           <CajaAperturaGuard usuario={usuario} />
           <DashboardLayout usuario={usuario} onLogout={handleLogout}>
@@ -794,6 +838,28 @@ function App() {
                         rolesPermitidos={["medico"]}
                       >
                         <MedicoConsultasPage usuario={usuario} />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/mis-evaluaciones-ocupacionales"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["medico"]}
+                      >
+                        <MisEvaluacionesOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/mis-evaluaciones-ocupacionales/:ordenId/examen/:detalleId"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["medico"]}
+                      >
+                        <FormatoClinicoExamenPage />
                       </ProtectedRoute>
                     }
                   />
@@ -921,18 +987,42 @@ function App() {
               {(usuario?.rol === "enfermero" ||
                 usuario?.rol === "administrador" ||
                 usuario?.rol === "recepcionista") && (
-                <Route
-                  path="/panel-enfermero"
-                  element={
-                    <ProtectedRoute
-                      usuario={usuario}
-                      rolesPermitidos={["enfermero", "administrador", "recepcionista"]}
-                      permisosRequeridos={["ver_panel_enfermeria"]}
-                    >
-                      <EnfermeroPanelPage />
-                    </ProtectedRoute>
-                  }
-                />
+                <>
+                  <Route
+                    path="/panel-enfermero"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["enfermero", "administrador", "recepcionista"]}
+                        permisosRequeridos={["ver_panel_enfermeria"]}
+                      >
+                        <EnfermeroPanelPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/mis-triajes-ocupacionales"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["enfermero", "administrador"]}
+                      >
+                        <MisTriajesOcupacionalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/mis-triajes-ocupacionales/:ordenId/examen/:detalleId"
+                    element={
+                      <ProtectedRoute
+                        usuario={usuario}
+                        rolesPermitidos={["enfermero", "administrador"]}
+                      >
+                        <FormatoClinicoExamenPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                </>
               )}
               {/* Solo visible para administradores y recepcionistas */}
               {(usuario?.rol === "administrador" ||

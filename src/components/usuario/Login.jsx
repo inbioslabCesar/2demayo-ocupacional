@@ -79,6 +79,13 @@ function Login({ onLogin }) {
   const [clinicName, setClinicName] = useState(cachedBrand?.clinicName || '');
   const navigate = useNavigate();
 
+  const getHomePathByRole = (rol) => {
+    if (String(rol || "").toLowerCase() === "empresa") {
+      return "/empresa/panel";
+    }
+    return "/";
+  };
+
   useEffect(() => {
     if (hasFreshCachedBrand) {
       return undefined;
@@ -194,10 +201,17 @@ function Login({ onLogin }) {
 
       if (usuarioNormalizado.rol === 'medico') {
         sessionStorage.removeItem('usuario');
+        sessionStorage.removeItem('empresa_portal');
         sessionStorage.removeItem('user_role');
         sessionStorage.setItem('medico', JSON.stringify(usuarioNormalizado));
+      } else if (usuarioNormalizado.rol === 'empresa') {
+        sessionStorage.removeItem('medico');
+        sessionStorage.setItem('empresa_portal', JSON.stringify(usuarioNormalizado));
+        sessionStorage.setItem('usuario', JSON.stringify(usuarioNormalizado));
+        sessionStorage.setItem('user_role', 'empresa');
       } else {
         sessionStorage.removeItem('medico');
+        sessionStorage.removeItem('empresa_portal');
         sessionStorage.setItem('usuario', JSON.stringify(usuarioNormalizado));
         if (usuarioNormalizado.rol) {
           sessionStorage.setItem('user_role', usuarioNormalizado.rol);
@@ -207,7 +221,7 @@ function Login({ onLogin }) {
       }
 
       onLogin && onLogin(usuarioNormalizado);
-      navigate("/");
+      navigate(getHomePathByRole(usuarioNormalizado.rol));
       return true;
     } catch {
       return false;
@@ -227,8 +241,35 @@ function Login({ onLogin }) {
       return;
     }
     
-    const esEmail = usuario.includes("@") && usuario.includes(".");
+    const usuarioTrim = String(usuario || "").trim().toLowerCase();
+    const esEmail = usuarioTrim.includes("@") && usuarioTrim.includes(".");
+    const esLoginEmpresa = /@clinica2demayo\.com$/i.test(usuarioTrim);
     try {
+      if (esLoginEmpresa) {
+        const resEmpresa = await authFetch("api_login_empresa.php", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest"
+          },
+          body: JSON.stringify({ usuario, password }),
+        });
+        const dataEmpresa = await resEmpresa.json().catch(() => ({}));
+        if (resEmpresa.ok && dataEmpresa?.success) {
+          const usuarioEmpresa = {
+            ...dataEmpresa.usuario,
+            permisos: normalizePermisos(dataEmpresa?.usuario?.permisos || []),
+          };
+          sessionStorage.removeItem('medico');
+          sessionStorage.setItem('usuario', JSON.stringify(usuarioEmpresa));
+          sessionStorage.setItem('empresa_portal', JSON.stringify(usuarioEmpresa));
+          sessionStorage.setItem('user_role', 'empresa');
+          onLogin && onLogin(usuarioEmpresa);
+          navigate(getHomePathByRole(usuarioEmpresa.rol));
+          return;
+        }
+      }
+
       if (esEmail) {
         // Lanzar médico y usuario en paralelo para evitar doble RTT secuencial.
         const fetchMedico = authFetch("api_login_medico.php", {
@@ -256,9 +297,10 @@ function Login({ onLogin }) {
           const medicoConRol = { ...dataMedico.medico, rol: 'medico' };
           sessionStorage.removeItem('usuario');
           sessionStorage.removeItem('user_role');
+          sessionStorage.removeItem('empresa_portal');
           sessionStorage.setItem('medico', JSON.stringify(medicoConRol));
           onLogin && onLogin(medicoConRol);
-          navigate("/");
+          navigate(getHomePathByRole(medicoConRol.rol));
           return;
         }
         if (dataUsuario?.success) {
@@ -267,6 +309,7 @@ function Login({ onLogin }) {
             permisos: normalizePermisos(dataUsuario?.usuario?.permisos || []),
           };
           sessionStorage.removeItem('medico');
+          sessionStorage.removeItem('empresa_portal');
           sessionStorage.setItem('usuario', JSON.stringify(usuarioNormalizado));
           if (usuarioNormalizado.rol) {
             sessionStorage.setItem('user_role', usuarioNormalizado.rol);
@@ -274,7 +317,7 @@ function Login({ onLogin }) {
             sessionStorage.setItem('user_role', 'recepcionista');
           }
           onLogin && onLogin(usuarioNormalizado);
-          navigate("/");
+          navigate(getHomePathByRole(usuarioNormalizado.rol));
           return;
         }
       } else {
@@ -300,6 +343,7 @@ function Login({ onLogin }) {
             permisos: normalizePermisos(data?.usuario?.permisos || []),
           };
           sessionStorage.removeItem('medico');
+          sessionStorage.removeItem('empresa_portal');
           sessionStorage.setItem('usuario', JSON.stringify(usuarioNormalizado));
           // Guardar el rol explícitamente para uso global
           if (usuarioNormalizado.rol) {
@@ -308,7 +352,7 @@ function Login({ onLogin }) {
             sessionStorage.setItem('user_role', 'recepcionista');
           }
           onLogin && onLogin(usuarioNormalizado);
-          navigate("/");
+          navigate(getHomePathByRole(usuarioNormalizado.rol));
           return;
         }
         // Si falla, intentar como médico
@@ -331,9 +375,10 @@ function Login({ onLogin }) {
           const medicoConRol = { ...dataMedico.medico, rol: 'medico' };
           sessionStorage.removeItem('usuario');
           sessionStorage.removeItem('user_role');
+          sessionStorage.removeItem('empresa_portal');
           sessionStorage.setItem('medico', JSON.stringify(medicoConRol));
           onLogin && onLogin(medicoConRol);
-          navigate("/");
+          navigate(getHomePathByRole(medicoConRol.rol));
           return;
         }
       }
@@ -401,6 +446,7 @@ function Login({ onLogin }) {
                 required
               />
             </div>
+            <p className="text-xs text-white/70">Empresas: use nombre_empresa@clinica2demayo.com</p>
 
             {/* Input Contraseña */}
             <div className="relative">

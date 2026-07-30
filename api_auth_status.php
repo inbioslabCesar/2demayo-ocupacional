@@ -2,6 +2,29 @@
 require_once __DIR__ . '/init_api.php';
 
 try {
+    if (isset($_SESSION['empresa_portal']) && is_array($_SESSION['empresa_portal'])) {
+        $empresa = $_SESSION['empresa_portal'];
+        $usuarioEmpresa = [
+            'id' => (int)($empresa['usuario_portal_id'] ?? 0),
+            'usuario' => (string)($empresa['email_login'] ?? ''),
+            'nombre' => (string)($empresa['nombre_empresa'] ?? ''),
+            'rol' => 'empresa',
+            'empresa_id' => (int)($empresa['empresa_id'] ?? 0),
+            'permisos' => ['empresa_portal_read'],
+        ];
+        echo json_encode([
+            'success' => true,
+            'authenticated' => true,
+            'usuario' => $usuarioEmpresa,
+            'usuario_id' => $usuarioEmpresa['id'],
+            'nombre' => $usuarioEmpresa['nombre'],
+            'rol' => 'empresa',
+            'permisos' => $usuarioEmpresa['permisos'],
+            'tipo' => 'empresa'
+        ]);
+        exit;
+    }
+
     // Verificar si hay usuario autenticado
     if (isset($_SESSION['usuario']) && is_array($_SESSION['usuario'])) {
         // Usuario normal autenticado (estructura existente)
