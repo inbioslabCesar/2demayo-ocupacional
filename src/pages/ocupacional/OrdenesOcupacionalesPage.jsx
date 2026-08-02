@@ -4,15 +4,19 @@ import {
   FiAlertCircle,
   FiCheckCircle,
   FiClipboard,
+  FiEdit2,
   FiEye,
   FiFileText,
   FiImage,
   FiMoreHorizontal,
   FiPrinter,
+  FiTrash2,
   FiUserCheck,
   FiXCircle,
 } from "react-icons/fi";
 import {
+  editarOrdenOcupacional,
+  eliminarOrdenOcupacional,
   listarEmpresasOcupacionales,
   listarProtocolosOcupacionales,
   listarTiposEvaluacionOcupacional,
@@ -434,6 +438,32 @@ function todayIso() {
   return `${y}-${m}-${d}`;
 }
 
+function isIsoDateString(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const dt = new Date(`${text}T00:00:00`);
+  return Number.isFinite(dt.getTime()) && dt.toISOString().slice(0, 10) === text;
+}
+
+function formatIsoDateForCertificate(value) {
+  const text = String(value || "").trim();
+  if (!isIsoDateString(text)) return "-";
+  const [y, m, d] = text.split("-");
+  return `${d}-${m}-${y}`;
+}
+
+function resolveCertificadoFormDates(det) {
+  const fechaOrden = String(det?.fecha_orden || "").trim();
+  const fechaEvaluacionRef = String(det?.certificado_fecha_evaluacion_ref || "").trim();
+  const fechaEmisionRef = String(det?.certificado_fecha_emision_ref || "").trim();
+  const fechaEvaluacionEfectiva = String(det?.certificado_fecha_evaluacion || "").trim();
+  const evaluacion = fechaEvaluacionRef || fechaEvaluacionEfectiva || fechaOrden || todayIso();
+  return {
+    fechaEvaluacion: evaluacion,
+    fechaEmision: fechaEmisionRef,
+  };
+}
+
 function prettyJsonInput(value) {
   if (value == null) return "[]";
   if (typeof value === "string") {
@@ -616,6 +646,7 @@ export default function OrdenesOcupacionalesPage() {
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [registrando, setRegistrando] = useState(false);
+  const [editingOrderId, setEditingOrderId] = useState(0);
 
   const [rows, setRows] = useState([]);
   const [selectedOrderId, setSelectedOrderId] = useState(0);
@@ -637,6 +668,8 @@ export default function OrdenesOcupacionalesPage() {
   const [exportandoGlobal, setExportandoGlobal] = useState(false);
   const [anulandoId, setAnulandoId] = useState(0);
   const [cerrandoId, setCerrandoId] = useState(0);
+  const [editandoOrdenId, setEditandoOrdenId] = useState(0);
+  const [eliminandoOrdenId, setEliminandoOrdenId] = useState(0);
   const [pdfId, setPdfId] = useState(0);
   const [detalleModalOpen, setDetalleModalOpen] = useState(false);
   const [detalleModalVista, setDetalleModalVista] = useState("full");
@@ -648,7 +681,14 @@ export default function OrdenesOcupacionalesPage() {
   const [eventosFiltros, setEventosFiltros] = useState({ tipo: "", fechaDesde: "", fechaHasta: "" });
   const [eventosFiltrados, setEventosFiltrados] = useState([]);
   const [eventosLoading, setEventosLoading] = useState(false);
-  const [aptitudForm, setAptitudForm] = useState({ aptitud: "", restriccion: "", recomendacion: "", medicoId: 0 });
+  const [aptitudForm, setAptitudForm] = useState({
+    aptitud: "",
+    restriccion: "",
+    recomendacion: "",
+    medicoId: 0,
+    certificadoFechaEvaluacion: "",
+    certificadoFechaEmision: "",
+  });
   const [savingAptitud, setSavingAptitud] = useState(false);
   const [certificandoId, setCertificandoId] = useState(0);
   const [interconsultas, setInterconsultas] = useState([]);
@@ -941,30 +981,53 @@ export default function OrdenesOcupacionalesPage() {
     setMessage("");
     try {
       const firmaDoctorPayload = medicoOrden ? buildMedicoToken(medicoOrden) : String(firmaDoctor || "").trim();
-      const data = await registrarOrdenOcupacional({
-        empresaId,
-        trabajadorId,
-        protocoloId,
-        tipoEvaluacionId,
-        fechaOrden,
-        observacion,
-        subcontrataEmpresaId,
-        facturarEmpresaId,
-        medicoResponsableId: medicoOrden.id,
-        firmaDoctor: firmaDoctorPayload,
-        modo: modoOrden,
-        gestante: gestanteOrden,
-        documento: documentoOrden,
-        indicaDr,
-      });
+      if (editingOrderId > 0) {
+        const data = await editarOrdenOcupacional({
+          id: editingOrderId,
+          empresaId,
+          trabajadorId,
+          protocoloId,
+          tipoEvaluacionId,
+          fechaOrden,
+          observacion,
+          subcontrataEmpresaId,
+          facturarEmpresaId,
+          medicoResponsableId: medicoOrden.id,
+          modo: modoOrden,
+          gestante: gestanteOrden,
+          documento: documentoOrden,
+          indicaDr,
+        });
+        setMessage(`Orden actualizada: ${data.codigo}`);
+      } else {
+        const data = await registrarOrdenOcupacional({
+          empresaId,
+          trabajadorId,
+          protocoloId,
+          tipoEvaluacionId,
+          fechaOrden,
+          observacion,
+          subcontrataEmpresaId,
+          facturarEmpresaId,
+          medicoResponsableId: medicoOrden.id,
+          firmaDoctor: firmaDoctorPayload,
+          modo: modoOrden,
+          gestante: gestanteOrden,
+          documento: documentoOrden,
+          indicaDr,
+        });
+        setMessage(`Orden registrada: ${data.codigo} (${data.total_items} examenes)`);
+      }
 
-      setMessage(`Orden registrada: ${data.codigo} (${data.total_items} examenes)`);
       setObservacion("");
       setDocumentoOrden("");
       setIndicaDr("");
+      setPreview(null);
+      setEditingOrderId(0);
+      setEditandoOrdenId(0);
       await recargarListadoYResumen();
     } catch (err) {
-      setError(err.message || "No se pudo registrar la orden");
+      setError(err.message || (editingOrderId > 0 ? "No se pudo editar la orden" : "No se pudo registrar la orden"));
     } finally {
       setRegistrando(false);
     }
@@ -1028,11 +1091,14 @@ export default function OrdenesOcupacionalesPage() {
       setEventosFiltrados(det.eventos || []);
       setInterconsultaForm({ detalleId: 0, especialidad: "", motivo: "", cie10: "", diagnostico: "", observaciones: "" });
       await recargarInterconsultas(ordenId);
+      const fechasCertificadoForm = resolveCertificadoFormDates(det);
       setAptitudForm({
         aptitud: det.aptitud_final || "",
         restriccion: det.restriccion_final || "",
         recomendacion: det.recomendacion_final || "",
         medicoId: Number(det.medico_responsable_id || resolveMedicoFromOrden(det, medicosCrud)?.id || 0),
+        certificadoFechaEvaluacion: fechasCertificadoForm.fechaEvaluacion,
+        certificadoFechaEmision: fechasCertificadoForm.fechaEmision,
       });
       setHistoriaEditingId(0);
       setHistoriaError("");
@@ -1090,11 +1156,14 @@ export default function OrdenesOcupacionalesPage() {
     setDetalleForms(nextForms);
     setEventosFiltrados(det.eventos || []);
     await recargarInterconsultas(ordenId);
+    const fechasCertificadoForm = resolveCertificadoFormDates(det);
     setAptitudForm({
       aptitud: det.aptitud_final || "",
       restriccion: det.restriccion_final || "",
       recomendacion: det.recomendacion_final || "",
       medicoId: Number(det.medico_responsable_id || resolveMedicoFromOrden(det, medicosCrud)?.id || 0),
+      certificadoFechaEvaluacion: fechasCertificadoForm.fechaEvaluacion,
+      certificadoFechaEmision: fechasCertificadoForm.fechaEmision,
     });
     try {
       const historia = await listarHistoriaOcupacionalPorOrden(ordenId);
@@ -1667,6 +1736,14 @@ export default function OrdenesOcupacionalesPage() {
       setDetalleModalError("Ingrese las restricciones para la aptitud seleccionada");
       return;
     }
+    if (!isIsoDateString(aptitudForm.certificadoFechaEvaluacion)) {
+      setDetalleModalError("Ingrese una fecha de evaluacion valida para el certificado");
+      return;
+    }
+    if (String(aptitudForm.certificadoFechaEmision || "").trim() !== "" && !isIsoDateString(aptitudForm.certificadoFechaEmision)) {
+      setDetalleModalError("Ingrese una fecha de emision valida o deje el campo vacio");
+      return;
+    }
     setSavingAptitud(true);
     setDetalleModalError("");
     setError("");
@@ -1678,6 +1755,8 @@ export default function OrdenesOcupacionalesPage() {
         restriccionFinal: aptitudForm.restriccion,
         recomendacionFinal: aptitudForm.recomendacion,
         medicoResponsableId: aptitudForm.medicoId,
+        certificadoFechaEvaluacion: aptitudForm.certificadoFechaEvaluacion,
+        certificadoFechaEmision: aptitudForm.certificadoFechaEmision,
       });
       await recargarDetalleModal(detalleModalData.id);
       await recargarListadoYResumen();
@@ -1733,12 +1812,9 @@ export default function OrdenesOcupacionalesPage() {
         ? await cropImageWhitespaceDataUrl(logoSelloDataUrl).catch(() => logoSelloDataUrl)
         : "";
 
-      const fechaEmisionActual = new Date();
-      const fechaEmisionTexto = [
-        String(fechaEmisionActual.getDate()).padStart(2, "0"),
-        String(fechaEmisionActual.getMonth() + 1).padStart(2, "0"),
-        String(fechaEmisionActual.getFullYear()),
-      ].join("-");
+      const fechaEvaluacionIso = String(det.certificado_fecha_evaluacion || det.fecha_orden || "").trim();
+      const fechaEmisionIso = String(det.certificado_fecha_emision || fechaEvaluacionIso || "").trim();
+      const fechaEmisionTexto = formatIsoDateForCertificate(fechaEmisionIso);
       const medicoFirmaNombre = String(
         det.medico_nombre_snapshot
         || det.medico_responsable
@@ -1756,7 +1832,7 @@ export default function OrdenesOcupacionalesPage() {
       ).trim();
       const tipoCodigo = String(det.tipo_codigo || "").trim().toUpperCase();
       const aptitud = normalizeAptitudKey(det.aptitud_final);
-      const fechaEvaluacion = String(det.fecha_orden || "-").split("-").reverse().join("-");
+      const fechaEvaluacion = formatIsoDateForCertificate(fechaEvaluacionIso);
       const sexo = String(det.paciente_sexo || "-").trim().toUpperCase();
       const edad = det.paciente_edad === null || det.paciente_edad === undefined ? "-" : String(det.paciente_edad);
       const x = 16;
@@ -1912,8 +1988,13 @@ export default function OrdenesOcupacionalesPage() {
       doc.text("Segun referencia R.M. 312-2011", x + 1, y + 14);
 
       const safeCode = String(det.codigo || `orden_${ordenId}`).replace(/[^A-Za-z0-9_-]/g, "_");
-      await registrarEmisionCertificadoOrdenOcupacional({ id: Number(det.id || ordenId), formato: "pdf" });
       doc.save(`certificado_aptitud_${safeCode}.pdf`);
+
+      try {
+        await registrarEmisionCertificadoOrdenOcupacional({ id: Number(det.id || ordenId), formato: "pdf" });
+      } catch (auditErr) {
+        console.warn("No se pudo registrar auditoria de emision de certificado", auditErr);
+      }
 
       if (detalleModalData?.id && Number(detalleModalData.id) === Number(det.id || ordenId)) {
         await recargarDetalleModal(detalleModalData.id);
@@ -2402,6 +2483,71 @@ export default function OrdenesOcupacionalesPage() {
     }
   };
 
+  const onEditarOrden = async (row) => {
+    if (!row || Number(row.id) <= 0) return;
+    if (String(row.estado || "") !== "emitida") {
+      setError("Solo se puede editar una orden en estado emitida");
+      return;
+    }
+
+    setEmpresaId(Number(row.empresa_id || 0));
+    setTrabajadorId(Number(row.trabajador_id || 0));
+    setProtocoloId(Number(row.protocolo_id || 0));
+    setTipoEvaluacionId(Number(row.tipo_evaluacion_id || 0));
+    setFechaOrden(String(row.fecha_orden || todayIso()));
+    setObservacion(String(row.observacion_orden || ""));
+    setSubcontrataEmpresaId(Number(row.subcontrata_empresa_id || 0));
+    setFacturarEmpresaId(Number(row.facturar_empresa_id || 0));
+    setMedicoOrdenId(Number(row.medico_responsable_id || 0));
+    setModoOrden(String(row.modo || "CONVALIDACION"));
+    setGestanteOrden(Number(row.gestante || 0) === 1);
+    setDocumentoOrden(String(row.documento || ""));
+    setIndicaDr(String(row.indica_dr || ""));
+    setPreview(null);
+    setEditingOrderId(Number(row.id));
+    setEditandoOrdenId(Number(row.id));
+    setMessage(`Modo edicion activo para ${row.codigo}. Previsualice y luego guarde cambios.`);
+    setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const onCancelarEdicionOrden = () => {
+    setEditingOrderId(0);
+    setEditandoOrdenId(0);
+    setPreview(null);
+    setMessage("Edicion cancelada");
+  };
+
+  const onEliminarOrden = async (row) => {
+    if (!row || Number(row.id) <= 0) return;
+    if (String(row.estado || "") !== "emitida") {
+      setError("Solo se puede eliminar una orden en estado emitida");
+      return;
+    }
+
+    const typed = (window.prompt(`Para eliminar ${row.codigo} escriba ELIMINAR:`) || "").trim().toUpperCase();
+    if (typed !== "ELIMINAR") {
+      setError("Confirmacion incorrecta. No se elimino la orden");
+      return;
+    }
+
+    setEliminandoOrdenId(Number(row.id));
+    setError("");
+    setMessage("");
+    try {
+      await eliminarOrdenOcupacional(row.id);
+      setMessage(`Orden eliminada: ${row.codigo}`);
+      if (Number(selectedOrderId) === Number(row.id)) {
+        setSelectedOrderId(0);
+      }
+      await recargarListadoYResumen();
+    } catch (err) {
+      setError(err.message || "No se pudo eliminar la orden");
+    } finally {
+      setEliminandoOrdenId(0);
+    }
+  };
+
   const exportReporteGlobalPdf = async () => {
     setExportandoGlobal(true);
     setError("");
@@ -2519,7 +2665,7 @@ export default function OrdenesOcupacionalesPage() {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <h2 className="text-lg font-semibold text-slate-900">Nueva orden ocupacional</h2>
+        <h2 className="text-lg font-semibold text-slate-900">{editingOrderId > 0 ? "Editar orden ocupacional" : "Nueva orden ocupacional"}</h2>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
           <select
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -2681,8 +2827,17 @@ export default function OrdenesOcupacionalesPage() {
             disabled={!preview || registrando}
             className="rounded bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
           >
-            {registrando ? "Registrando..." : "Registrar orden"}
+            {registrando ? (editingOrderId > 0 ? "Guardando cambios..." : "Registrando...") : (editingOrderId > 0 ? "Guardar cambios" : "Registrar orden")}
           </button>
+          {editingOrderId > 0 ? (
+            <button
+              type="button"
+              onClick={onCancelarEdicionOrden}
+              className="rounded border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Cancelar edicion
+            </button>
+          ) : null}
         </div>
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
@@ -2923,6 +3078,18 @@ export default function OrdenesOcupacionalesPage() {
                 label="Anular orden"
                 disabled={!selectedOrder || ["anulada", "completada", "cerrada"].includes(selectedOrder.estado) || anulandoId === selectedOrder.id}
                 onClick={() => onAnular(selectedOrder)}
+              />
+              <ActionIconButton
+                icon={FiEdit2}
+                label="Editar orden"
+                disabled={!selectedOrder || selectedOrder.estado !== "emitida" || editandoOrdenId === selectedOrder.id}
+                onClick={() => onEditarOrden(selectedOrder)}
+              />
+              <ActionIconButton
+                icon={FiTrash2}
+                label="Eliminar orden"
+                disabled={!selectedOrder || selectedOrder.estado !== "emitida" || eliminandoOrdenId === selectedOrder.id}
+                onClick={() => onEliminarOrden(selectedOrder)}
               />
               <ActionIconButton icon={FiMoreHorizontal} label="Mas acciones: proximamente" disabled />
             </div>
@@ -3412,6 +3579,27 @@ export default function OrdenesOcupacionalesPage() {
                         placeholder="Recomendaciones"
                         disabled={!aptitudEditable || savingAptitud}
                       />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-600">Fecha de evaluacion certificado</label>
+                      <input
+                        type="date"
+                        className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                        value={aptitudForm.certificadoFechaEvaluacion}
+                        onChange={(e) => setAptitudForm((prev) => ({ ...prev, certificadoFechaEvaluacion: e.target.value }))}
+                        disabled={!aptitudEditable || savingAptitud}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-600">Fecha de emision certificado (opcional)</label>
+                      <input
+                        type="date"
+                        className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                        value={aptitudForm.certificadoFechaEmision}
+                        onChange={(e) => setAptitudForm((prev) => ({ ...prev, certificadoFechaEmision: e.target.value }))}
+                        disabled={!aptitudEditable || savingAptitud}
+                      />
+                      <p className="mt-1 text-[11px] text-slate-500">Si no define emision, se usa la fecha de evaluacion.</p>
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">

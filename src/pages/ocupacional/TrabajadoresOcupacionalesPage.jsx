@@ -150,7 +150,6 @@ export default function TrabajadoresOcupacionalesPage() {
         id: editing.id,
         puestoTrabajo: editing.puesto_trabajo,
         areaRiesgo: editing.area_riesgo,
-        tipoContrato: editing.tipo_contrato,
         fechaIngreso: editing.fecha_ingreso,
       });
       setEditing(null);
@@ -407,11 +406,6 @@ export default function TrabajadoresOcupacionalesPage() {
                   <option value="">Sin área</option>
                   {editing.area_riesgo && !editAreas.some((row) => row.nombre === editing.area_riesgo) ? <option value={editing.area_riesgo}>{editing.area_riesgo}</option> : null}
                   {editAreas.map((row) => <option key={row.id} value={row.nombre}>{row.nombre}</option>)}
-                </select>
-              </label>
-              <label className="text-sm font-medium text-slate-700">Tipo de contrato
-                <select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={editing.tipo_contrato || ""} onChange={(e) => setEditing((prev) => ({ ...prev, tipo_contrato: e.target.value }))}>
-                  <option value="">Sin especificar</option><option value="indefinido">Indefinido</option><option value="plazo_fijo">Plazo fijo</option><option value="temporal">Temporal</option>
                 </select>
               </label>
               <label className="text-sm font-medium text-slate-700">Fecha de ingreso

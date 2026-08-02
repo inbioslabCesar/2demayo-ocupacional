@@ -50,6 +50,24 @@ function calculate_age_empresa_portal($birthDate)
     }
 }
 
+function resolve_fechas_certificado_empresa_portal($fechaOrden, $fechaEvaluacionRef, $fechaEmisionRef)
+{
+    $fechaOrdenText = trim((string)$fechaOrden);
+    $fechaEvaluacionRefText = trim((string)$fechaEvaluacionRef);
+    $fechaEmisionRefText = trim((string)$fechaEmisionRef);
+
+    $baseEvaluacion = is_valid_date_empresa_portal($fechaOrdenText) ? $fechaOrdenText : date('Y-m-d');
+    $fechaEvaluacion = is_valid_date_empresa_portal($fechaEvaluacionRefText) ? $fechaEvaluacionRefText : $baseEvaluacion;
+    $fechaEmision = is_valid_date_empresa_portal($fechaEmisionRefText) ? $fechaEmisionRefText : $fechaEvaluacion;
+
+    return [
+        'fecha_evaluacion_ref' => is_valid_date_empresa_portal($fechaEvaluacionRefText) ? $fechaEvaluacionRefText : '',
+        'fecha_emision_ref' => is_valid_date_empresa_portal($fechaEmisionRefText) ? $fechaEmisionRefText : '',
+        'fecha_evaluacion' => $fechaEvaluacion,
+        'fecha_emision' => $fechaEmision,
+    ];
+}
+
 function require_empresa_portal_session()
 {
     $empresa = $_SESSION['empresa_portal'] ?? null;
@@ -153,6 +171,87 @@ function registrar_evento_descarga_empresa_portal($mysqliOcup, $ordenId, $empres
     $stmtEvt->close();
 }
 
+function normalizar_path_relativo_empresa_portal($value)
+{
+    $raw = trim((string)$value);
+    if ($raw === '') {
+        return '';
+    }
+    $normalized = str_replace('\\', '/', $raw);
+    $normalized = ltrim($normalized, '/');
+    if ($normalized === '' || strpos($normalized, '..') !== false) {
+        return '';
+    }
+    return $normalized;
+}
+
+function resolver_pdf_interconsulta_empresa_portal($relativePath)
+{
+    $normalized = normalizar_path_relativo_empresa_portal($relativePath);
+    if ($normalized === '') {
+        return '';
+    }
+    $baseDir = realpath(__DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'ocupacional' . DIRECTORY_SEPARATOR . 'interconsultas');
+    $absolute = realpath(__DIR__ . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized));
+    if (!$baseDir || !$absolute) {
+        return '';
+    }
+    $baseDirNorm = rtrim(str_replace('\\', '/', $baseDir), '/');
+    $absoluteNorm = str_replace('\\', '/', $absolute);
+    if ($absoluteNorm !== $baseDirNorm && strpos($absoluteNorm, $baseDirNorm . '/') !== 0) {
+        return '';
+    }
+    if (!is_file($absolute)) {
+        return '';
+    }
+    return $absolute;
+}
+
+function get_descarga_interconsulta_empresa_portal($mysqliOcup, $empresaId, $ordenId)
+{
+    $stmt = $mysqliOcup->prepare('SELECT i.id,
+                                         i.respuesta_documento,
+                                         i.respuesta_at,
+                                         i.updated_at,
+                                         i.created_at,
+                                         i.especialista_nombre
+                                  FROM ocupacional_interconsultas i
+                                  INNER JOIN ocupacional_ordenes o ON o.id = i.orden_id
+                                  WHERE i.orden_id = ?
+                                    AND o.empresa_id = ?
+                                    AND i.estado <> "anulada"
+                                    AND TRIM(COALESCE(i.respuesta_documento, "")) <> ""
+                                  ORDER BY COALESCE(i.respuesta_at, i.updated_at, i.created_at) DESC, i.id DESC
+                                  LIMIT 1');
+    if (!$stmt) {
+        return null;
+    }
+    $stmt->bind_param('ii', $ordenId, $empresaId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return $row ?: null;
+}
+
+function contar_documentos_interconsulta_empresa_portal($mysqliOcup, $empresaId, $ordenId)
+{
+    $stmt = $mysqliOcup->prepare('SELECT COUNT(*) AS total
+                                  FROM ocupacional_interconsultas i
+                                  INNER JOIN ocupacional_ordenes o ON o.id = i.orden_id
+                                  WHERE i.orden_id = ?
+                                    AND o.empresa_id = ?
+                                    AND i.estado <> "anulada"
+                                    AND TRIM(COALESCE(i.respuesta_documento, "")) <> ""');
+    if (!$stmt) {
+        return 0;
+    }
+    $stmt->bind_param('ii', $ordenId, $empresaId);
+    $stmt->execute();
+    $total = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+    $stmt->close();
+    return $total;
+}
+
 $empresaSesion = require_empresa_portal_session();
 $empresaIdSesion = (int)($empresaSesion['empresa_id'] ?? 0);
 
@@ -161,6 +260,75 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 }
 
 $accion = trim((string)($_GET['accion'] ?? 'listar'));
+
+if ($accion === 'interconsulta_descarga_info') {
+    $ordenId = (int)($_GET['orden_id'] ?? 0);
+    if ($ordenId <= 0) {
+        out_empresa_portal(422, ['success' => false, 'error' => 'orden_id es obligatorio']);
+    }
+
+    $hasInterconsultaTable = column_exists_empresa_portal($mysqliOcup, 'ocupacional_interconsultas', 'id');
+    $hasRespuestaDocumento = column_exists_empresa_portal($mysqliOcup, 'ocupacional_interconsultas', 'respuesta_documento');
+    if (!$hasInterconsultaTable || !$hasRespuestaDocumento) {
+        out_empresa_portal(200, ['success' => true, 'data' => ['disponible' => false, 'total_documentos' => 0]]);
+    }
+
+    $totalDocumentos = contar_documentos_interconsulta_empresa_portal($mysqliOcup, $empresaIdSesion, $ordenId);
+    if ($totalDocumentos <= 0) {
+        out_empresa_portal(200, ['success' => true, 'data' => ['disponible' => false, 'total_documentos' => 0]]);
+    }
+
+    $downloadParams = http_build_query([
+        'accion' => 'interconsulta_descargar',
+        'orden_id' => $ordenId,
+    ]);
+    out_empresa_portal(200, [
+        'success' => true,
+        'data' => [
+            'disponible' => true,
+            'total_documentos' => $totalDocumentos,
+            'download_url' => 'api_empresa_portal_ordenes.php?' . $downloadParams,
+        ],
+    ]);
+}
+
+if ($accion === 'interconsulta_descargar') {
+    $ordenId = (int)($_GET['orden_id'] ?? 0);
+    if ($ordenId <= 0) {
+        out_empresa_portal(422, ['success' => false, 'error' => 'orden_id es obligatorio']);
+    }
+
+    $hasInterconsultaTable = column_exists_empresa_portal($mysqliOcup, 'ocupacional_interconsultas', 'id');
+    $hasRespuestaDocumento = column_exists_empresa_portal($mysqliOcup, 'ocupacional_interconsultas', 'respuesta_documento');
+    if (!$hasInterconsultaTable || !$hasRespuestaDocumento) {
+        out_empresa_portal(404, ['success' => false, 'error' => 'No hay interconsulta para descargar']);
+    }
+
+    $doc = get_descarga_interconsulta_empresa_portal($mysqliOcup, $empresaIdSesion, $ordenId);
+    if (!$doc) {
+        out_empresa_portal(404, ['success' => false, 'error' => 'No hay documento de interconsulta disponible']);
+    }
+
+    $absolutePdfPath = resolver_pdf_interconsulta_empresa_portal((string)($doc['respuesta_documento'] ?? ''));
+    if ($absolutePdfPath === '') {
+        out_empresa_portal(404, ['success' => false, 'error' => 'El archivo de interconsulta no existe']);
+    }
+
+    $safeOrden = preg_replace('/[^A-Za-z0-9_-]/', '_', (string)$ordenId);
+    $safeInterconsulta = preg_replace('/[^A-Za-z0-9_-]/', '_', (string)($doc['id'] ?? '0'));
+    $downloadName = 'interconsulta_' . $safeOrden . '_' . $safeInterconsulta . '.pdf';
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: attachment; filename="' . $downloadName . '"');
+    header('Content-Length: ' . filesize($absolutePdfPath));
+    header('Cache-Control: private, no-store, no-cache, must-revalidate');
+    header('Pragma: no-cache');
+    readfile($absolutePdfPath);
+    exit;
+}
 
 if ($accion === 'listar') {
     $page = max(1, (int)($_GET['page'] ?? 1));
@@ -187,6 +355,15 @@ if ($accion === 'listar') {
     $types = 'i';
     $params = [$empresaIdSesion];
 
+    $hasCertFechaEvaluacion = column_exists_empresa_portal($mysqliOcup, 'ocupacional_ordenes', 'certificado_fecha_evaluacion');
+    $hasCertFechaEmision = column_exists_empresa_portal($mysqliOcup, 'ocupacional_ordenes', 'certificado_fecha_emision');
+    $sqlExprFechaEvaluacionRef = $hasCertFechaEvaluacion ? 'o.certificado_fecha_evaluacion' : 'NULL';
+    $sqlExprFechaEmisionRef = $hasCertFechaEmision ? 'o.certificado_fecha_emision' : 'NULL';
+    $sqlExprFechaEvaluacion = $hasCertFechaEvaluacion ? 'COALESCE(o.certificado_fecha_evaluacion, o.fecha_orden)' : 'o.fecha_orden';
+    $sqlExprFechaEmision = $hasCertFechaEmision
+        ? 'COALESCE(o.certificado_fecha_emision, ' . $sqlExprFechaEvaluacion . ')'
+        : $sqlExprFechaEvaluacion;
+
     if ($soloAprobados) {
         $where[] = 'o.aptitud_final IN ("APTO", "APTO_CON_RESTRICCIONES")';
     }
@@ -205,17 +382,54 @@ if ($accion === 'listar') {
         $params[] = $estado;
     }
     if ($fechaDesde !== '') {
-        $where[] = 'o.fecha_orden >= ?';
+        $where[] = $sqlExprFechaEvaluacion . ' >= ?';
         $types .= 's';
         $params[] = $fechaDesde;
     }
     if ($fechaHasta !== '') {
-        $where[] = 'o.fecha_orden <= ?';
+        $where[] = $sqlExprFechaEvaluacion . ' <= ?';
         $types .= 's';
         $params[] = $fechaHasta;
     }
 
     $whereSql = ' WHERE ' . implode(' AND ', $where);
+
+    $hasInterconsultasListado = column_exists_empresa_portal($mysqliOcup, 'ocupacional_interconsultas', 'id');
+    $hasInterconsultasDocumento = $hasInterconsultasListado && column_exists_empresa_portal($mysqliOcup, 'ocupacional_interconsultas', 'respuesta_documento');
+    $exprConteoDocumentos = $hasInterconsultasDocumento
+        ? 'SUM(CASE WHEN TRIM(COALESCE(respuesta_documento, "")) <> "" THEN 1 ELSE 0 END) AS interconsultas_con_documento'
+        : '0 AS interconsultas_con_documento';
+    $interconsultasSelect = $hasInterconsultasListado
+        ? 'COALESCE(ic.total_interconsultas, 0) AS total_interconsultas,
+                    COALESCE(ic.interconsultas_abiertas, 0) AS interconsultas_abiertas,
+                    COALESCE(ic.interconsultas_respondidas, 0) AS interconsultas_respondidas,
+                    COALESCE(ic.interconsultas_levantadas, 0) AS interconsultas_levantadas,
+                    COALESCE(ic.levantamientos_favorables, 0) AS levantamientos_favorables,
+                    COALESCE(ic.levantamientos_no_favorables, 0) AS levantamientos_no_favorables,
+                    COALESCE(ic.interconsultas_con_documento, 0) AS interconsultas_con_documento,'
+        : '0 AS total_interconsultas,
+                    0 AS interconsultas_abiertas,
+                    0 AS interconsultas_respondidas,
+                    0 AS interconsultas_levantadas,
+                    0 AS levantamientos_favorables,
+                    0 AS levantamientos_no_favorables,
+                    0 AS interconsultas_con_documento,';
+    $interconsultasJoin = $hasInterconsultasListado
+        ? ' LEFT JOIN (
+                SELECT
+                    orden_id,
+                    COUNT(*) AS total_interconsultas,
+                    SUM(CASE WHEN estado IN ("solicitada", "respondida") THEN 1 ELSE 0 END) AS interconsultas_abiertas,
+                    SUM(CASE WHEN estado = "respondida" THEN 1 ELSE 0 END) AS interconsultas_respondidas,
+                    SUM(CASE WHEN estado = "levantada" THEN 1 ELSE 0 END) AS interconsultas_levantadas,
+                    SUM(CASE WHEN estado = "levantada" AND resultado_levantamiento = "FAVORABLE" THEN 1 ELSE 0 END) AS levantamientos_favorables,
+                    SUM(CASE WHEN estado = "levantada" AND resultado_levantamiento = "NO_FAVORABLE" THEN 1 ELSE 0 END) AS levantamientos_no_favorables,
+                    ' . $exprConteoDocumentos . '
+                FROM ocupacional_interconsultas
+                WHERE estado <> "anulada"
+                GROUP BY orden_id
+            ) ic ON ic.orden_id = o.id'
+        : '';
 
     $sqlCount = 'SELECT COUNT(*) AS total
                  FROM ocupacional_ordenes o
@@ -236,6 +450,10 @@ if ($accion === 'listar') {
                     o.id,
                     o.codigo,
                     o.fecha_orden,
+                    ' . $sqlExprFechaEvaluacionRef . ' AS certificado_fecha_evaluacion_ref,
+                    ' . $sqlExprFechaEmisionRef . ' AS certificado_fecha_emision_ref,
+                    ' . $sqlExprFechaEvaluacion . ' AS certificado_fecha_evaluacion,
+                    ' . $sqlExprFechaEmision . ' AS certificado_fecha_emision,
                     o.estado,
                     o.aptitud_final,
                     o.restriccion_final,
@@ -247,6 +465,7 @@ if ($accion === 'listar') {
                     p.descripcion AS protocolo_descripcion,
                     te.codigo AS tipo_codigo,
                     te.nombre AS tipo_nombre,
+                    ' . $interconsultasSelect . '
                     COALESCE(ce.total_certificados, 0) AS total_certificados,
                     ce.ultimo_certificado_at
                 FROM ocupacional_ordenes o
@@ -261,6 +480,7 @@ if ($accion === 'listar') {
                     WHERE tipo_evento = "certificado_emitido"
                     GROUP BY orden_id
                 ) ce ON ce.orden_id = o.id'
+                . $interconsultasJoin
                 . $whereSql
                 . ' ORDER BY o.fecha_orden DESC, o.id DESC LIMIT ? OFFSET ?';
 
@@ -287,6 +507,10 @@ if ($accion === 'listar') {
             'id' => (int)$r['id'],
             'codigo' => (string)($r['codigo'] ?? ''),
             'fecha_orden' => (string)($r['fecha_orden'] ?? ''),
+            'certificado_fecha_evaluacion_ref' => (string)($r['certificado_fecha_evaluacion_ref'] ?? ''),
+            'certificado_fecha_emision_ref' => (string)($r['certificado_fecha_emision_ref'] ?? ''),
+            'certificado_fecha_evaluacion' => (string)($r['certificado_fecha_evaluacion'] ?? ''),
+            'certificado_fecha_emision' => (string)($r['certificado_fecha_emision'] ?? ''),
             'estado' => (string)($r['estado'] ?? ''),
             'aptitud_final' => (string)($r['aptitud_final'] ?? ''),
             'restriccion_final' => (string)($r['restriccion_final'] ?? ''),
@@ -297,6 +521,13 @@ if ($accion === 'listar') {
             'protocolo_descripcion' => (string)($r['protocolo_descripcion'] ?? ''),
             'tipo_codigo' => (string)($r['tipo_codigo'] ?? ''),
             'tipo_nombre' => (string)($r['tipo_nombre'] ?? ''),
+            'total_interconsultas' => (int)($r['total_interconsultas'] ?? 0),
+            'interconsultas_abiertas' => (int)($r['interconsultas_abiertas'] ?? 0),
+            'interconsultas_respondidas' => (int)($r['interconsultas_respondidas'] ?? 0),
+            'interconsultas_levantadas' => (int)($r['interconsultas_levantadas'] ?? 0),
+            'levantamientos_favorables' => (int)($r['levantamientos_favorables'] ?? 0),
+            'levantamientos_no_favorables' => (int)($r['levantamientos_no_favorables'] ?? 0),
+            'interconsultas_con_documento' => (int)($r['interconsultas_con_documento'] ?? 0),
             'certificado_emitido' => ((int)($r['total_certificados'] ?? 0)) > 0,
             'certificado_emitido_at' => (string)($r['ultimo_certificado_at'] ?? ''),
             '_external_patient_id' => $externalPatientId,
@@ -345,11 +576,18 @@ if ($accion === 'certificado_data') {
         out_empresa_portal(422, ['success' => false, 'error' => 'id de orden es obligatorio']);
     }
 
+    $hasCertFechaEvaluacion = column_exists_empresa_portal($mysqliOcup, 'ocupacional_ordenes', 'certificado_fecha_evaluacion');
+    $hasCertFechaEmision = column_exists_empresa_portal($mysqliOcup, 'ocupacional_ordenes', 'certificado_fecha_emision');
+    $sqlExprFechaEvaluacionRef = $hasCertFechaEvaluacion ? 'o.certificado_fecha_evaluacion' : 'NULL';
+    $sqlExprFechaEmisionRef = $hasCertFechaEmision ? 'o.certificado_fecha_emision' : 'NULL';
+
     $stmtCab = $mysqliOcup->prepare('SELECT
         o.id,
         o.empresa_id,
         o.codigo,
         o.fecha_orden,
+        ' . $sqlExprFechaEvaluacionRef . ' AS certificado_fecha_evaluacion_ref,
+        ' . $sqlExprFechaEmisionRef . ' AS certificado_fecha_emision_ref,
         o.estado,
         o.aptitud_final,
         o.restriccion_final,
@@ -389,6 +627,12 @@ if ($accion === 'certificado_data') {
     if (trim((string)($cab['aptitud_final'] ?? '')) === '') {
         out_empresa_portal(409, ['success' => false, 'error' => 'La orden aun no tiene aptitud final']);
     }
+
+    $fechasCertificado = resolve_fechas_certificado_empresa_portal(
+        (string)($cab['fecha_orden'] ?? ''),
+        (string)($cab['certificado_fecha_evaluacion_ref'] ?? ''),
+        (string)($cab['certificado_fecha_emision_ref'] ?? '')
+    );
 
     $externalPatientId = (int)($cab['external_patient_id'] ?? 0);
     $paciente = [
@@ -465,6 +709,10 @@ if ($accion === 'certificado_data') {
                 'id' => (int)$cab['id'],
                 'codigo' => (string)($cab['codigo'] ?? ''),
                 'fecha_orden' => (string)($cab['fecha_orden'] ?? ''),
+                'certificado_fecha_evaluacion_ref' => $fechasCertificado['fecha_evaluacion_ref'],
+                'certificado_fecha_emision_ref' => $fechasCertificado['fecha_emision_ref'],
+                'certificado_fecha_evaluacion' => $fechasCertificado['fecha_evaluacion'],
+                'certificado_fecha_emision' => $fechasCertificado['fecha_emision'],
                 'estado' => (string)($cab['estado'] ?? ''),
                 'empresa' => (string)($cab['empresa'] ?? ''),
                 'tipo_codigo' => (string)($cab['tipo_codigo'] ?? ''),

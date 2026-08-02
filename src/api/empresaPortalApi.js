@@ -68,3 +68,16 @@ export async function obtenerCertificadoDataEmpresaPortal(ordenId) {
   const payload = await parseJsonOrThrow(response);
   return payload.data || null;
 }
+
+export async function obtenerDescargaInterconsultaEmpresaPortal(ordenId) {
+  const params = new URLSearchParams({
+    accion: "interconsulta_descarga_info",
+    orden_id: String(Number(ordenId) || 0),
+  });
+  const response = await fetch(`${BASE_URL}api_empresa_portal_ordenes.php?${params.toString()}`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data || { disponible: false, total_documentos: 0, download_url: "" };
+}

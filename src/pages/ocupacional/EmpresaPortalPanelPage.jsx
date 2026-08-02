@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listarOrdenesEmpresaPortal, obtenerCertificadoDataEmpresaPortal } from "../../api/empresaPortalApi";
+import {
+  listarOrdenesEmpresaPortal,
+  obtenerCertificadoDataEmpresaPortal,
+  obtenerDescargaInterconsultaEmpresaPortal,
+} from "../../api/empresaPortalApi";
 import { BASE_URL } from "../../config/config";
 
 const ESTADOS_ORDEN = ["", "emitida", "en_proceso", "completada", "cerrada", "anulada"];
@@ -11,6 +15,18 @@ function formatDate(value) {
   const parts = raw.split("-");
   if (parts.length !== 3) return raw;
   return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
+function resolveCertificadoFechaEvaluacion(orden) {
+  const ref = String(orden?.certificado_fecha_evaluacion || "").trim();
+  if (ref) return ref;
+  return String(orden?.fecha_orden || "").trim();
+}
+
+function resolveCertificadoFechaEmision(orden) {
+  const ref = String(orden?.certificado_fecha_emision || "").trim();
+  if (ref) return ref;
+  return resolveCertificadoFechaEvaluacion(orden);
 }
 
 function resolveAssetUrl(rawValue) {
@@ -137,12 +153,38 @@ function formatEstadoLabel(value) {
   return raw.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function formatRestriccion(value) {
+  const raw = String(value || "").trim();
+  return raw;
+}
+
+function formatInterconsultas(row) {
+  const total = Number(row?.total_interconsultas || 0);
+  const abiertas = Number(row?.interconsultas_abiertas || 0);
+  if (total <= 0) return "-";
+  if (abiertas > 0) return `${abiertas} pendiente(s)`;
+  return `${total} cerrada(s)`;
+}
+
+function hasInterconsultaDocumento(row) {
+  return Number(row?.interconsultas_con_documento || 0) > 0;
+}
+
+function formatLevantamiento(row) {
+  const favorables = Number(row?.levantamientos_favorables || 0);
+  const noFavorables = Number(row?.levantamientos_no_favorables || 0);
+  const totalLevantadas = Number(row?.interconsultas_levantadas || 0);
+  if (totalLevantadas <= 0) return "-";
+  return `F:${favorables} / NF:${noFavorables}`;
+}
+
 export default function EmpresaPortalPanelPage({ usuario, onLogout }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState({ page: 1, per_page: 20, total: 0, total_pages: 0 });
   const [downloadingId, setDownloadingId] = useState(0);
+  const [downloadingInterconsultaOrdenId, setDownloadingInterconsultaOrdenId] = useState(0);
   const [brand, setBrand] = useState({
     clinicName: "CLINICA 2 DE MAYO",
     logoSrc: FALLBACK_LOGO_SRC,
@@ -271,7 +313,9 @@ export default function EmpresaPortalPanelPage({ usuario, onLogout }) {
       const rna = String(medico.rna || "").trim();
       const tipoCodigo = String(orden.tipo_codigo || "").trim().toUpperCase();
       const aptitud = String(orden.aptitud_final || "").trim().toUpperCase();
-      const fechaEvaluacion = formatDate(orden.fecha_orden);
+      const fechaEvaluacionIso = resolveCertificadoFechaEvaluacion(orden);
+      const fechaEmisionIso = resolveCertificadoFechaEmision(orden);
+      const fechaEvaluacion = formatDate(fechaEvaluacionIso);
       const sexo = String(paciente.sexo || "-").trim().toUpperCase();
       const edad = paciente.edad === null || paciente.edad === undefined ? "-" : String(paciente.edad);
       const x = 16;
@@ -420,9 +464,7 @@ export default function EmpresaPortalPanelPage({ usuario, onLogout }) {
       doc.text("Sello y firma del medico que CERTIFICA", 105, y + 58, { align: "center" });
       y += 63;
 
-      const fechaEmision = new Date();
-      const fechaEmisionTexto = `${String(fechaEmision.getDate()).padStart(2, "0")}-${String(fechaEmision.getMonth() + 1).padStart(2, "0")}-${String(fechaEmision.getFullYear())}`;
-      drawCell(x, y, 80, 10, `Fecha de emision: ${fechaEmisionTexto}`, { fontSize: 8.5 });
+      drawCell(x, y, 80, 10, `Fecha de emision: ${formatDate(fechaEmisionIso)}`, { fontSize: 8.5 });
       drawCell(x + 80, y, 98, 10, "", { fontSize: 8.5 });
       doc.setFont("times", "bold");
       doc.setFontSize(6.5);
@@ -434,6 +476,25 @@ export default function EmpresaPortalPanelPage({ usuario, onLogout }) {
       setError(err.message || "No se pudo descargar el certificado");
     } finally {
       setDownloadingId(0);
+    }
+  };
+
+  const descargarInterconsulta = async (ordenId) => {
+    const numericOrdenId = Number(ordenId) || 0;
+    if (numericOrdenId <= 0) return;
+    setDownloadingInterconsultaOrdenId(numericOrdenId);
+    setError("");
+    try {
+      const data = await obtenerDescargaInterconsultaEmpresaPortal(numericOrdenId);
+      if (!data?.disponible || !String(data?.download_url || "").trim()) {
+        throw new Error("No hay interconsulta con documento disponible todavía");
+      }
+      const fullUrl = `${BASE_URL}${String(data.download_url).replace(/^\/+/, "")}`;
+      window.open(fullUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err.message || "No se pudo descargar la interconsulta");
+    } finally {
+      setDownloadingInterconsultaOrdenId(0);
     }
   };
 
@@ -573,21 +634,22 @@ export default function EmpresaPortalPanelPage({ usuario, onLogout }) {
                   <th className="px-3 py-2 text-left font-medium">Documento</th>
                   <th className="px-3 py-2 text-left font-medium">Tipo</th>
                   <th className="px-3 py-2 text-left font-medium">Aptitud</th>
-                  <th className="px-3 py-2 text-left font-medium">Estado</th>
-                  <th className="px-3 py-2 text-left font-medium">Certificado</th>
+                  <th className="px-3 py-2 text-left font-medium">Restricción</th>
+                  <th className="px-3 py-2 text-left font-medium">Interconsultas</th>
+                  <th className="px-3 py-2 text-left font-medium">Levantamiento</th>
                   <th className="px-3 py-2 text-right font-medium">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-10 text-center text-sm text-slate-500">
+                    <td colSpan={10} className="px-3 py-10 text-center text-sm text-slate-500">
                       {loading ? "Cargando resultados..." : "No hay pacientes para los filtros seleccionados"}
                     </td>
                   </tr>
                 ) : rows.map((row) => (
                   <tr key={row.id} className="transition hover:bg-violet-50/40">
-                    <td className="px-3 py-2">{formatDate(row.fecha_orden)}</td>
+                    <td className="px-3 py-2">{formatDate(resolveCertificadoFechaEvaluacion(row))}</td>
                     <td className="px-3 py-2 font-medium">{row.codigo || "-"}</td>
                     <td className="px-3 py-2">{row.paciente_nombre_completo || "-"}</td>
                     <td className="px-3 py-2">{row.documento_numero || "-"}</td>
@@ -597,16 +659,23 @@ export default function EmpresaPortalPanelPage({ usuario, onLogout }) {
                         {aptitudLabel(row.aptitud_final)}
                       </span>
                     </td>
+                    <td className="px-3 py-2">{formatRestriccion(row.restriccion_final)}</td>
                     <td className="px-3 py-2">
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${estadoBadgeClass(row.estado)}`}>
-                        {formatEstadoLabel(row.estado)}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>{formatInterconsultas(row)}</span>
+                        {hasInterconsultaDocumento(row) ? (
+                          <button
+                            type="button"
+                            onClick={() => descargarInterconsulta(row.id)}
+                            disabled={downloadingInterconsultaOrdenId === Number(row.id)}
+                            className="rounded-lg border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-xs font-medium text-cyan-700 transition hover:bg-cyan-100 disabled:opacity-60"
+                          >
+                            {downloadingInterconsultaOrdenId === Number(row.id) ? "Descargando..." : "Descargar"}
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${row.certificado_emitido ? "bg-cyan-100 text-cyan-700 border-cyan-200" : "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                        {row.certificado_emitido ? "Emitido" : "Pendiente"}
-                      </span>
-                    </td>
+                    <td className="px-3 py-2">{formatLevantamiento(row)}</td>
                     <td className="px-3 py-2 text-right">
                       <button
                         type="button"

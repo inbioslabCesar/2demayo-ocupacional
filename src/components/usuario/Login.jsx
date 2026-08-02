@@ -82,6 +82,9 @@ function normalizeEmpresaEmailAlias(rawUsuario) {
     "clinica2demayo.com",
     "clinica2demayo.co",
     "clinica2demayo",
+    "clinicadosdemayo.com",
+    "clinicadosdemayo.co",
+    "clinicadosdemayo",
   ]);
   if (!dominiosEmpresaAlias.has(domain)) {
     return null;

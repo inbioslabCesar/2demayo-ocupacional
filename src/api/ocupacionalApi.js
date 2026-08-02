@@ -1196,12 +1196,65 @@ export async function cerrarOrdenOcupacional(id) {
   return payload;
 }
 
+export async function editarOrdenOcupacional({
+  id,
+  empresaId,
+  trabajadorId,
+  protocoloId,
+  tipoEvaluacionId,
+  fechaOrden,
+  observacion,
+  medicoResponsableId,
+  modo,
+  gestante,
+  documento,
+  indicaDr,
+  subcontrataEmpresaId,
+  facturarEmpresaId,
+} = {}) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      accion: "editar_orden",
+      id: Number(id),
+      empresa_id: Number(empresaId || 0),
+      trabajador_id: Number(trabajadorId || 0),
+      protocolo_id: Number(protocoloId || 0),
+      tipo_evaluacion_id: Number(tipoEvaluacionId || 0),
+      fecha_orden: String(fechaOrden || "").trim(),
+      observacion: String(observacion || "").trim(),
+      medico_responsable_id: Number(medicoResponsableId || 0),
+      modo: String(modo || "").trim(),
+      gestante: typeof gestante === "boolean" ? gestante : undefined,
+      documento: String(documento || "").trim(),
+      indica_dr: String(indicaDr || "").trim(),
+      subcontrata_empresa_id: Number(subcontrataEmpresaId ?? -1),
+      facturar_empresa_id: Number(facturarEmpresaId ?? -1),
+    }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
+export async function eliminarOrdenOcupacional(id) {
+  const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ accion: "eliminar_orden", id: Number(id) }),
+  });
+  const payload = await parseJsonOrThrow(response);
+  return payload.data;
+}
+
 export async function guardarAptitudOrdenOcupacional({
   id,
   aptitudFinal,
   restriccionFinal,
   recomendacionFinal,
   medicoResponsableId,
+  certificadoFechaEvaluacion,
+  certificadoFechaEmision,
 } = {}) {
   const response = await fetch(`${BASE_URL}api_ocupacional_ordenes.php`, {
     method: "POST",
@@ -1213,6 +1266,8 @@ export async function guardarAptitudOrdenOcupacional({
       restriccion_final: String(restriccionFinal || "").trim(),
       recomendacion_final: String(recomendacionFinal || "").trim(),
       medico_responsable_id: Number(medicoResponsableId || 0),
+      certificado_fecha_evaluacion: String(certificadoFechaEvaluacion || "").trim(),
+      certificado_fecha_emision: String(certificadoFechaEmision || "").trim(),
     }),
   });
   const payload = await parseJsonOrThrow(response);

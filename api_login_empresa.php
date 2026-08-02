@@ -4,6 +4,14 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/db_ocupacional.php';
 
 const EMPRESA_LOGIN_DOMAIN = 'clinica2demayo.com';
+const EMPRESA_LOGIN_ALLOWED_DOMAINS = [
+    'clinica2demayo.com',
+    'clinica2demayo.co',
+    'clinica2demayo',
+    'clinicadosdemayo.com',
+    'clinicadosdemayo.co',
+    'clinicadosdemayo',
+];
 
 function out_empresa_login($code, $payload)
 {
@@ -57,11 +65,13 @@ function parse_empresa_login_email($email)
     }
     $localPart = trim((string)$parts[0]);
     $domain = trim((string)$parts[1]);
-    if ($localPart === '' || $domain !== EMPRESA_LOGIN_DOMAIN) {
+    if ($localPart === '' || !in_array($domain, EMPRESA_LOGIN_ALLOWED_DOMAINS, true)) {
         return null;
     }
+    $canonicalEmail = $localPart . '@' . EMPRESA_LOGIN_DOMAIN;
     return [
-        'email' => $email,
+        'email' => $canonicalEmail,
+        'email_original' => $email,
         'local' => $localPart,
     ];
 }
@@ -181,12 +191,14 @@ ensure_empresa_portal_table($mysqliOcup);
 $stmtAcc = $mysqliOcup->prepare('SELECT pu.id, pu.empresa_id, pu.email_login, pu.password_hash, pu.estado, e.ruc, e.razon_social, e.estado AS empresa_estado
                                  FROM ocupacional_empresas_portal_usuarios pu
                                  INNER JOIN empresas_ocupacionales e ON e.id = pu.empresa_id
-                                 WHERE LOWER(pu.email_login) = LOWER(?)
+                                 WHERE LOWER(pu.email_login) = LOWER(?) OR LOWER(pu.email_login) = LOWER(?)
                                  LIMIT 1');
 if (!$stmtAcc) {
     out_empresa_login(500, ['success' => false, 'error' => 'No se pudo autenticar empresa']);
 }
-$stmtAcc->bind_param('s', $parsedEmail['email']);
+$emailCanonical = (string)$parsedEmail['email'];
+$emailOriginal = (string)($parsedEmail['email_original'] ?? $emailCanonical);
+$stmtAcc->bind_param('ss', $emailCanonical, $emailOriginal);
 $stmtAcc->execute();
 $account = $stmtAcc->get_result()->fetch_assoc();
 $stmtAcc->close();
