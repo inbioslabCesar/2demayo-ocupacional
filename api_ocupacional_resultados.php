@@ -88,6 +88,93 @@ function require_owner_medico_result_ocup($ownerMedicoId, $contexto = 'resultado
     }
 }
 
+function medico_es_responsable_clinico_por_detalle_result_ocup($mysqliOcup, $ordenDetalleId, $medicoId)
+{
+    $detalleId = (int)$ordenDetalleId;
+    $medico = (int)$medicoId;
+    if ($detalleId <= 0 || $medico <= 0) {
+        return false;
+    }
+    if (!table_exists_result_ocup($mysqliOcup, 'ocupacional_resultados_clinicos')) {
+        return false;
+    }
+
+    $stmt = $mysqliOcup->prepare('SELECT 1
+                                  FROM ocupacional_resultados_clinicos rc
+                                  WHERE rc.orden_detalle_id = ?
+                                    AND COALESCE(rc.estado, "") <> "anulado"
+                                    AND CAST(JSON_UNQUOTE(JSON_EXTRACT(rc.datos_json, "$.responsable_profesional_id")) AS UNSIGNED) = ?
+                                  LIMIT 1');
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param('ii', $detalleId, $medico);
+    $stmt->execute();
+    $exists = (bool)$stmt->get_result()->fetch_row();
+    $stmt->close();
+    return $exists;
+}
+
+function medico_es_responsable_clinico_por_bloque_result_ocup($mysqliOcup, $ordenDetalleId, $medicoId)
+{
+    $detalleId = (int)$ordenDetalleId;
+    $medico = (int)$medicoId;
+    if ($detalleId <= 0 || $medico <= 0) {
+        return false;
+    }
+    if (!table_exists_result_ocup($mysqliOcup, 'ocupacional_resultados_clinicos')) {
+        return false;
+    }
+
+    $stmt = $mysqliOcup->prepare('SELECT 1
+                                  FROM ocupacional_orden_detalle dref
+                                  LEFT JOIN ocupacional_examenes_generales egref ON egref.id = dref.examen_id
+                                  WHERE dref.id = ?
+                                    AND EXISTS (
+                                        SELECT 1
+                                        FROM ocupacional_orden_detalle d2
+                                        LEFT JOIN ocupacional_examenes_generales eg2 ON eg2.id = d2.examen_id
+                                        INNER JOIN ocupacional_resultados_clinicos rc2 ON rc2.orden_detalle_id = d2.id
+                                        WHERE d2.orden_id = dref.orden_id
+                                          AND COALESCE(rc2.estado, "") <> "anulado"
+                                          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(rc2.datos_json, "$.responsable_profesional_id")) AS UNSIGNED) = ?
+                                          AND UPPER(COALESCE(NULLIF(d2.grupo_snapshot, ""), eg2.grupo, ""))
+                                              = UPPER(COALESCE(NULLIF(dref.grupo_snapshot, ""), egref.grupo, ""))
+                                    )
+                                  LIMIT 1');
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param('ii', $detalleId, $medico);
+    $stmt->execute();
+    $exists = (bool)$stmt->get_result()->fetch_row();
+    $stmt->close();
+    return $exists;
+}
+
+function require_owner_medico_or_clinico_result_ocup($mysqliOcup, $ownerMedicoId, $ordenDetalleId, $contexto = 'resultado')
+{
+    if (!es_sesion_medico_result_ocup()) {
+        return;
+    }
+
+    $medicoSesionId = resolve_medico_sesion_id_result_ocup();
+    $ownerId = (int)$ownerMedicoId;
+    if ($medicoSesionId > 0 && $ownerId > 0 && $medicoSesionId === $ownerId) {
+        return;
+    }
+
+    if (medico_es_responsable_clinico_por_detalle_result_ocup($mysqliOcup, (int)$ordenDetalleId, $medicoSesionId)) {
+        return;
+    }
+
+    if (medico_es_responsable_clinico_por_bloque_result_ocup($mysqliOcup, (int)$ordenDetalleId, $medicoSesionId)) {
+        return;
+    }
+
+    out_result_ocup(403, ['success' => false, 'error' => 'No autorizado para acceder a este ' . $contexto]);
+}
+
 function column_exists_result_ocup($conn, $table, $column)
 {
     $stmt = $conn->prepare('SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1');
@@ -1233,7 +1320,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             out_result_ocup(404, ['success' => false, 'error' => 'Detalle de orden no encontrado']);
         }
         if ($esSesionMedico) {
-            require_owner_medico_result_ocup((int)($detalle['medico_responsable_id'] ?? 0), 'resultado clinico');
+            require_owner_medico_or_clinico_result_ocup(
+                $mysqliOcup,
+                (int)($detalle['medico_responsable_id'] ?? 0),
+                (int)($detalle['id'] ?? 0),
+                'resultado clinico'
+            );
         }
 
         $snapshotJson = resolve_snapshot_json_result_ocup(
@@ -1325,7 +1417,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         out_result_ocup(404, ['success' => false, 'error' => 'Detalle de orden no encontrado']);
     }
     if ($esSesionMedico) {
-        require_owner_medico_result_ocup((int)($detalle['medico_responsable_id'] ?? 0), 'resultado clinico');
+        require_owner_medico_or_clinico_result_ocup(
+            $mysqliOcup,
+            (int)($detalle['medico_responsable_id'] ?? 0),
+            (int)($detalle['id'] ?? 0),
+            'resultado clinico'
+        );
     }
     if ($esSesionEnfermero && !es_detalle_triaje_result_ocup(
         (string)($detalle['examen_codigo'] ?? ''),
@@ -1660,7 +1757,12 @@ if ($accion === 'actualizar_examen_detalle') {
         out_result_ocup(404, ['success' => false, 'error' => 'Detalle de orden no encontrado']);
     }
     if ($esSesionMedico) {
-        require_owner_medico_result_ocup((int)($detalle['medico_responsable_id'] ?? 0), 'resultado clinico');
+        require_owner_medico_or_clinico_result_ocup(
+            $mysqliOcup,
+            (int)($detalle['medico_responsable_id'] ?? 0),
+            (int)($detalle['id'] ?? 0),
+            'resultado clinico'
+        );
     }
     if ($esSesionEnfermero && !es_detalle_triaje_result_ocup(
         (string)($detalle['examen_codigo'] ?? ''),
@@ -1814,7 +1916,12 @@ if (!$detalle) {
     out_result_ocup(404, ['success' => false, 'error' => 'Detalle de orden no encontrado']);
 }
 if ($esSesionMedico) {
-    require_owner_medico_result_ocup((int)($detalle['medico_responsable_id'] ?? 0), 'resultado clinico');
+    require_owner_medico_or_clinico_result_ocup(
+        $mysqliOcup,
+        (int)($detalle['medico_responsable_id'] ?? 0),
+        (int)($detalle['id'] ?? 0),
+        'resultado clinico'
+    );
 }
 if ($esSesionEnfermero && !es_detalle_triaje_result_ocup(
     (string)($detalle['examen_codigo'] ?? ''),

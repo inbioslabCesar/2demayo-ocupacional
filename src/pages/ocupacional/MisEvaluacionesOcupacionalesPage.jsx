@@ -20,6 +20,8 @@ function badgeExamen(estado) {
 }
 
 function resolverDetalleObjetivo(orden) {
+  const detallePreferido = Number(orden?.detalle_objetivo_medico_id || 0);
+  if (detallePreferido > 0) return detallePreferido;
   const items = Array.isArray(orden?.estado_clinico_items) ? orden.estado_clinico_items : [];
   if (!items.length) return 0;
   const pendiente = items.find((it) => String(it?.estado || "").toLowerCase() !== "realizado");

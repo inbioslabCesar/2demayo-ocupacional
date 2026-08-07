@@ -102,6 +102,72 @@ function require_owner_medico_orden($ownerMedicoId, $contexto = 'orden')
     }
 }
 
+function medico_es_responsable_clinico_en_orden_orden($mysqliOcup, $ordenId, $medicoId)
+{
+    $oid = (int)$ordenId;
+    $mid = (int)$medicoId;
+    if ($oid <= 0 || $mid <= 0) {
+        return false;
+    }
+    if (!table_exists_orden($mysqliOcup, 'ocupacional_resultados_clinicos')) {
+        return false;
+    }
+
+    $stmt = $mysqliOcup->prepare('SELECT 1
+                                  FROM ocupacional_orden_detalle od
+                                  INNER JOIN ocupacional_resultados_clinicos rc ON rc.orden_detalle_id = od.id
+                                  WHERE od.orden_id = ?
+                                    AND COALESCE(rc.estado, "") <> "anulado"
+                                    AND CAST(JSON_UNQUOTE(JSON_EXTRACT(rc.datos_json, "$.responsable_profesional_id")) AS UNSIGNED) = ?
+                                  LIMIT 1');
+    if (!$stmt) {
+        return false;
+    }
+    $stmt->bind_param('ii', $oid, $mid);
+    $stmt->execute();
+    $exists = (bool)$stmt->get_result()->fetch_row();
+    $stmt->close();
+    return $exists;
+}
+
+function medico_grupos_clinicos_autorizados_en_orden_orden($mysqliOcup, $ordenId, $medicoId)
+{
+    $oid = (int)$ordenId;
+    $mid = (int)$medicoId;
+    if ($oid <= 0 || $mid <= 0) {
+        return [];
+    }
+    if (!table_exists_orden($mysqliOcup, 'ocupacional_resultados_clinicos')) {
+        return [];
+    }
+
+    $stmt = $mysqliOcup->prepare('SELECT DISTINCT UPPER(COALESCE(NULLIF(od.grupo_snapshot, ""), eg.grupo, "")) AS grupo_autorizado
+                                  FROM ocupacional_orden_detalle od
+                                  LEFT JOIN ocupacional_examenes_generales eg ON eg.id = od.examen_id
+                                  INNER JOIN ocupacional_resultados_clinicos rc ON rc.orden_detalle_id = od.id
+                                  WHERE od.orden_id = ?
+                                    AND COALESCE(rc.estado, "") <> "anulado"
+                                    AND CAST(JSON_UNQUOTE(JSON_EXTRACT(rc.datos_json, "$.responsable_profesional_id")) AS UNSIGNED) = ?');
+    if (!$stmt) {
+        return [];
+    }
+
+    $stmt->bind_param('ii', $oid, $mid);
+    $stmt->execute();
+    $res = $stmt->get_result();
+
+    $grupos = [];
+    while ($row = $res->fetch_assoc()) {
+        $g = strtoupper(trim((string)($row['grupo_autorizado'] ?? '')));
+        if ($g !== '') {
+            $grupos[$g] = true;
+        }
+    }
+    $stmt->close();
+
+    return array_keys($grupos);
+}
+
 function require_owner_medico_by_orden_id_orden($mysqliOcup, $ordenId, $ordenExtraColumns, $contexto = 'orden')
 {
     if (!es_sesion_medico_orden()) {
@@ -1169,9 +1235,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             if (empty($ordenExtraColumns['medico_responsable_id'])) {
                 out_orden(500, ['success' => false, 'error' => 'Falta columna medico_responsable_id para listar por medico']);
             }
-            $where[] = 'o.medico_responsable_id = ?';
-            $types .= 'i';
-            $params[] = $medicoSesionId;
+            $hasResultadosClinicos = table_exists_orden($mysqliOcup, 'ocupacional_resultados_clinicos');
+            if ($hasResultadosClinicos) {
+                // Permite que un profesional vea ordenes donde fue consignado como responsable en el formato clinico.
+                $where[] = '(o.medico_responsable_id = ? OR EXISTS (
+                                SELECT 1
+                                FROM ocupacional_orden_detalle odm
+                                INNER JOIN ocupacional_resultados_clinicos rcm ON rcm.orden_detalle_id = odm.id
+                                WHERE odm.orden_id = o.id
+                                  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(rcm.datos_json, "$.responsable_profesional_id")) AS UNSIGNED) = ?
+                                  AND COALESCE(rcm.estado, "") <> "anulado"
+                            ))';
+                $types .= 'ii';
+                $params[] = $medicoSesionId;
+                $params[] = $medicoSesionId;
+            } else {
+                $where[] = 'o.medico_responsable_id = ?';
+                $types .= 'i';
+                $params[] = $medicoSesionId;
+            }
         }
         if ($q !== '') {
             $where[] = '(o.codigo LIKE ? OR t.documento_numero LIKE ? OR p.descripcion LIKE ?)';
@@ -1260,6 +1342,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 ) ic ON ic.orden_id = o.id'
             : '';
 
+        $sqlExprDetalleObjetivoMedico = '0';
+        if ($esSesionMedico && $medicoSesionId > 0 && table_exists_orden($mysqliOcup, 'ocupacional_resultados_clinicos')) {
+            $mid = (int)$medicoSesionId;
+            $sqlExprDetalleObjetivoMedico = '(SELECT odsel.id
+                                              FROM ocupacional_orden_detalle odsel
+                                              LEFT JOIN ocupacional_examenes_generales egsel ON egsel.id = odsel.examen_id
+                                              WHERE odsel.orden_id = o.id
+                                                AND (
+                                                    o.medico_responsable_id = ' . $mid . '
+                                                    OR EXISTS (
+                                                        SELECT 1
+                                                        FROM ocupacional_orden_detalle odown
+                                                        LEFT JOIN ocupacional_examenes_generales egown ON egown.id = odown.examen_id
+                                                        INNER JOIN ocupacional_resultados_clinicos rcown ON rcown.orden_detalle_id = odown.id
+                                                        WHERE odown.orden_id = o.id
+                                                          AND COALESCE(rcown.estado, "") <> "anulado"
+                                                          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(rcown.datos_json, "$.responsable_profesional_id")) AS UNSIGNED) = ' . $mid . '
+                                                          AND UPPER(COALESCE(NULLIF(odown.grupo_snapshot, ""), egown.grupo, ""))
+                                                              = UPPER(COALESCE(NULLIF(odsel.grupo_snapshot, ""), egsel.grupo, ""))
+                                                    )
+                                                )
+                                              ORDER BY
+                                                  CASE
+                                                      WHEN odsel.estado_ejecucion = "observado" THEN 0
+                                                      WHEN odsel.estado_ejecucion = "pendiente" THEN 1
+                                                      WHEN odsel.estado_ejecucion = "en_proceso" THEN 2
+                                                      WHEN odsel.estado_ejecucion = "realizado" AND NOT EXISTS (
+                                                          SELECT 1
+                                                          FROM ocupacional_resultados_clinicos rcf
+                                                          WHERE rcf.orden_detalle_id = odsel.id
+                                                            AND rcf.estado = "finalizado"
+                                                      ) THEN 3
+                                                      ELSE 4
+                                                  END,
+                                                  odsel.id ASC
+                                              LIMIT 1)';
+        }
+
         $sqlRows = 'SELECT
                         o.id,
                         o.codigo,
@@ -1298,6 +1418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         COALESCE(d.observaciones_resumen, "") AS observaciones_resumen,
                         COALESCE(d.estado_clinico_items_raw, "") AS estado_clinico_items_raw,
                         COALESCE(d.triaje_detalle_id, 0) AS triaje_detalle_id,
+                        COALESCE(' . $sqlExprDetalleObjetivoMedico . ', 0) AS detalle_objetivo_medico_id,
                         COALESCE(d.triaje_finalizado, 0) AS triaje_finalizado,
                         ' . $interconsultasSelect . '
                         COALESCE(ce.total_certificados, 0) AS total_certificados,
@@ -1472,6 +1593,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'observaciones_resumen' => (string)($r['observaciones_resumen'] ?? ''),
                 'estado_clinico_items' => $estadoClinicoItems,
                 'triaje_detalle_id' => (int)($r['triaje_detalle_id'] ?? 0),
+                'detalle_objetivo_medico_id' => (int)($r['detalle_objetivo_medico_id'] ?? 0),
                 'triaje_finalizado' => (int)($r['triaje_finalizado'] ?? 0) === 1,
                 'total_interconsultas' => (int)($r['total_interconsultas'] ?? 0),
                 'interconsultas_abiertas' => (int)($r['interconsultas_abiertas'] ?? 0),
@@ -1853,7 +1975,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             if (empty($ordenExtraColumns['medico_responsable_id'])) {
                 out_orden(500, ['success' => false, 'error' => 'Falta columna medico_responsable_id para validar ownership medico']);
             }
-            require_owner_medico_orden((int)($cab['medico_responsable_id'] ?? 0), 'orden');
+            $ownerMedicoId = (int)($cab['medico_responsable_id'] ?? 0);
+            if ($ownerMedicoId !== $medicoSesionId) {
+                if (!medico_es_responsable_clinico_en_orden_orden($mysqliOcup, $ordenId, $medicoSesionId)) {
+                    out_orden(403, ['success' => false, 'error' => 'No autorizado para acceder a este orden']);
+                }
+            }
         }
 
         $medicoRnaVigente = '';
@@ -1961,6 +2088,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             ];
         }
         $stmtDet->close();
+
+        if ($esSesionMedico) {
+            $ownerMedicoId = (int)($cab['medico_responsable_id'] ?? 0);
+            if ($ownerMedicoId !== $medicoSesionId) {
+                $gruposPermitidos = medico_grupos_clinicos_autorizados_en_orden_orden($mysqliOcup, $ordenId, $medicoSesionId);
+                if (count($gruposPermitidos) > 0) {
+                    $allowedMap = array_fill_keys($gruposPermitidos, true);
+                    $detalles = array_values(array_filter(
+                        $detalles,
+                        static function ($it) use ($allowedMap) {
+                            $grupo = strtoupper(trim((string)($it['examen_grupo'] ?? '')));
+                            return $grupo !== '' && isset($allowedMap[$grupo]);
+                        }
+                    ));
+                } else {
+                    $detalles = [];
+                }
+                if (count($detalles) <= 0) {
+                    out_orden(403, ['success' => false, 'error' => 'No autorizado para acceder a evaluaciones fuera de su bloque clinico']);
+                }
+            }
+        }
 
         if ($esSesionEnfermero) {
             $detalles = array_values(array_filter(
